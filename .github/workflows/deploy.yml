@@ -1,0 +1,33 @@
+name: Deploy
+
+on:
+  repository_dispatch:
+    types: [deploy]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH deploy with cleanup
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          password: ${{ secrets.PASSWORD }}
+          port: ${{ secrets.PORT }}
+          script: |
+            IMAGE_TAG="${{ github.event.client_payload.image_tag }}"
+            # Pull new image
+            docker pull ghcr.io/thecodemonkey/pcmn:"$IMAGE_TAG"
+
+            # Stop and remove existing container
+            docker stop pcmn || true
+            docker rm pcmn || true
+
+            # Run new container
+            docker run -d --name pcmn \
+              -p 7172:7172 \
+              ghcr.io/thecodemonkey/pcmn:"$IMAGE_TAG"
+
+            # Cleanup old images, behalte nur die letzten 3
+            # docker images -q ghcr.io/thecodemonkey/pcmn | tail -n +4 | xargs -r docker rmi -f

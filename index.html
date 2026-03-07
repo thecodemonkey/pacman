@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OSM Pac-Man</title>
+  </head>
+  <body>
+    <div id="app">
+      <div id="map"></div>
+      <div id="hud" class="glass">
+        <div class="hud-item">
+          <span class="label">SCORE</span>
+          <span id="score" class="value">0000</span>
+        </div>
+        <div class="hud-item">
+          <span class="label">LIVES</span>
+          <div id="lives" class="value">❤❤❤</div>
+        </div>
+        <button id="view-toggle" class="glass-btn">Satellite View</button>
+      </div>
+    </div>
+
+    <div id="game-over-screen" class="hidden">
+      <div class="game-over-modal">
+        <h1 class="game-over-title">GAME OVER</h1>
+        <p class="game-over-score">Score: <span id="final-score">0</span></p>
+        <button id="btn-restart" class="pacman-btn">Try Again</button>
+      </div>
+    </div>
+
+    <div id="loading-screen" class="glass">
+      <div class="loader"></div>
+      <p>Detecting Geolocation & Loading Streets...</p>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
