@@ -26,9 +26,9 @@ jobs:
             docker rm pacman || true
 
             # Run new container
-            docker run -d --name pcmn \
-              -p 7172:7172 \
-              ghcr.io/thecodemonkey/pcmn:"$IMAGE_TAG"
+            docker run -d --name pacman \
+              -p 7172:80 \
+              ghcr.io/thecodemonkey/pacman:"$IMAGE_TAG"
 
             # Cleanup old images, behalte nur die letzten 3
-            # docker images -q ghcr.io/thecodemonkey/pcmn | tail -n +4 | xargs -r docker rmi -f
+            # docker images -q ghcr.io/thecodemonkey/pacman | tail -n +4 | xargs -r docker rmi -f
