@@ -18,11 +18,11 @@ jobs:
           script: |
             IMAGE_TAG="${{ github.event.client_payload.image_tag }}"
             # Pull new image
-            docker pull ghcr.io/thecodemonkey/pcmn:"$IMAGE_TAG"
+            docker pull ghcr.io/thecodemonkey/pacman:"$IMAGE_TAG"
 
             # Stop and remove existing container
-            docker stop pcmn || true
-            docker rm pcmn || true
+            docker stop pacman || true
+            docker rm pacman || true
 
             # Run new container
             docker run -d --name pcmn \
