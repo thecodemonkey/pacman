@@ -77,7 +77,8 @@ function getThemeColors() {
       streetInner: '#000000',
       streetInnerWidth: 12,
       streetInnerAlpha: 1,
-      dotColor: '#ffb852',
+      dotCircle: '#ffde00',
+      dotText: '#0a0a5c',
     };
   } else if (currentTheme === 'satellite') {
     return {
@@ -87,7 +88,8 @@ function getThemeColors() {
       streetInner: '#0b0c10',
       streetInnerWidth: 14,
       streetInnerAlpha: 0.75,
-      dotColor: '#ffffff',
+      dotCircle: '#ffde00',
+      dotText: '#0a0a5c',
     };
   } else {
     return {
@@ -97,7 +99,8 @@ function getThemeColors() {
       streetInner: '#00d2ff',
       streetInnerWidth: 8,
       streetInnerAlpha: 0.8,
-      dotColor: '#000000',
+      dotCircle: '#ffde00',
+      dotText: '#000000',
     };
   }
 }
@@ -503,17 +506,49 @@ function drawStreets() {
 function drawDots() {
   const colors = getThemeColors();
   const dots = engine.getDots();
+  const dotRadius = 9;
+  const minDist = dotRadius * 2.5; // minimum distance between dots to avoid overlap
+  const minDistSq = minDist * minDist;
+  const placed: Array<{ x: number; y: number }> = [];
+
   ctx.save();
-  ctx.fillStyle = colors.dotColor;
-  ctx.globalAlpha = 0.9;
-  ctx.font = 'bold 12px monospace';
+  ctx.font = 'bold 10px monospace';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  let i = 0;
+
   for (const dot of dots) {
     const p = toPoint(dot.lat, dot.lon);
-    ctx.fillText(i % 2 === 0 ? '0' : '1', p.x, p.y);
-    i++;
+    const px = Math.round(p.x);
+    const py = Math.round(p.y);
+
+    // Skip dots that overlap with already-placed ones
+    let tooClose = false;
+    for (let k = 0; k < placed.length; k++) {
+      const dx = px - placed[k].x;
+      const dy = py - placed[k].y;
+      if (dx * dx + dy * dy < minDistSq) {
+        tooClose = true;
+        break;
+      }
+    }
+    if (tooClose) continue;
+    placed.push({ x: px, y: py });
+
+    // Stable 0/1 from node id
+    let hash = 0;
+    for (let j = 0; j < dot.id.length; j++) hash += dot.id.charCodeAt(j);
+
+    // Circle
+    ctx.beginPath();
+    ctx.arc(px, py, dotRadius, 0, Math.PI * 2);
+    ctx.fillStyle = colors.dotCircle;
+    ctx.globalAlpha = 0.9;
+    ctx.fill();
+
+    // Number
+    ctx.fillStyle = colors.dotText;
+    ctx.globalAlpha = 1;
+    ctx.fillText(hash % 2 === 0 ? '0' : '1', px, py + 1);
   }
   ctx.restore();
 }
