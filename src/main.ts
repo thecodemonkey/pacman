@@ -10,6 +10,7 @@ let currentTheme: 'street' | 'pacman' | 'satellite' = 'street';
 let userPos: [number, number] = [51.505, -0.09];
 let currentRotation = 0;
 let activeKey: 'ArrowUp'|'ArrowDown'|'ArrowLeft'|'ArrowRight' | null = null;
+let bufferedKey: 'ArrowUp'|'ArrowDown'|'ArrowLeft'|'ArrowRight' | null = null;
 let pacCurrentNodeId: string | null = null;
 let pacTargetNodeId: string | null = null;
 let pacProgress = 0;
@@ -198,6 +199,7 @@ function switchCity(lat: number, lon: number) {
   isGameOver = false;
   isRespawning = false;
   activeKey = null;
+  bufferedKey = null;
   pacCurrentNodeId = null;
   pacTargetNodeId = null;
   pacProgress = 0;
@@ -351,6 +353,7 @@ function resetGameParams() {
   isGameOver = false;
   isRespawning = false;
   activeKey = null;
+  bufferedKey = null;
   pacCurrentNodeId = null;
   pacTargetNodeId = null;
   pacProgress = 0;
@@ -398,6 +401,7 @@ function triggerRespawn() {
   isRespawning = true;
   lastFrameTime = 0;
   activeKey = null;
+  bufferedKey = null;
   respawnTimer = 0;
   respawnBlinkOn = true;
 
@@ -784,12 +788,14 @@ function gameLoop(time: number) {
     pacTargetNodeId = engine.getNextNode(pacCurrentNodeId, activeKey);
     if (pacTargetNodeId) {
        pacProgress = 0;
+       bufferedKey = null;
        updatePacmanRotation(pacCurrentNodeId, pacTargetNodeId);
     }
   }
 
   // 2. Interpolate movement
   if (pacTargetNodeId) {
+    // Check for reversal (immediate U-turn)
     if (activeKey) {
       const idealNextFromTarget = engine.getNextNode(pacTargetNodeId, activeKey);
       if (idealNextFromTarget === pacCurrentNodeId) {
@@ -797,11 +803,15 @@ function gameLoop(time: number) {
          pacTargetNodeId = pacCurrentNodeId;
          pacCurrentNodeId = temp;
          pacProgress = 1 - pacProgress;
+         bufferedKey = null;
          updatePacmanRotation(pacCurrentNodeId, pacTargetNodeId);
+      } else if (activeKey !== bufferedKey) {
+         // Buffer a different direction for the next intersection
+         bufferedKey = activeKey;
       }
     }
 
-    if (activeKey) {
+    if (activeKey || bufferedKey) {
        const cNode = engine.getNodes().get(pacCurrentNodeId)!;
        const tNode = engine.getNodes().get(pacTargetNodeId)!;
        const dist = map.distance([cNode.lat, cNode.lon], [tNode.lat, tNode.lon]);
@@ -815,7 +825,23 @@ function gameLoop(time: number) {
           engine.setPacmanPosition(pacCurrentNodeId);
           updateHUD();
 
-          pacTargetNodeId = engine.getNextNode(pacCurrentNodeId, activeKey);
+          // Try buffered direction first, then active key
+          const turnKey = bufferedKey || activeKey;
+          let nextNode: string | null = null;
+          if (turnKey) {
+            nextNode = engine.getNextNode(pacCurrentNodeId, turnKey);
+            if (nextNode) {
+              activeKey = turnKey;
+              bufferedKey = null;
+            }
+          }
+          // If buffered key didn't work, try active key
+          if (!nextNode && bufferedKey && activeKey) {
+            nextNode = engine.getNextNode(pacCurrentNodeId, activeKey);
+            bufferedKey = null;
+          }
+
+          pacTargetNodeId = nextNode;
           if (pacTargetNodeId) {
              pacProgress = 0;
              updatePacmanRotation(pacCurrentNodeId, pacTargetNodeId);
@@ -923,6 +949,7 @@ function setupInput() {
   window.addEventListener('keyup', (e) => {
     if (e.key === activeKey) {
       activeKey = null;
+      bufferedKey = null;
     }
   });
 
@@ -1086,6 +1113,7 @@ function setupInput() {
       }
     } else {
       activeKey = null;
+      bufferedKey = null;
     }
   }
 
@@ -1094,6 +1122,7 @@ function setupInput() {
     knobTargetX = 0;
     knobTargetY = 0;
     activeKey = null;
+    bufferedKey = null;
   }
 
   // Mouse events

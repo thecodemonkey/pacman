@@ -133,22 +133,31 @@ export class GameEngine {
     const currentNode = this.nodes.get(nodeId);
     if (!currentNode) return null;
 
+    // Target angle in radians for each direction (in lat/lon space)
+    const targetAngle: Record<string, number> = {
+      'ArrowRight': 0,
+      'ArrowUp': Math.PI / 2,
+      'ArrowLeft': Math.PI,
+      'ArrowDown': -Math.PI / 2,
+    };
+    const target = targetAngle[direction];
+
     let bestNeighbor = "";
-    let bestScore = -1;
+    let bestAngleDiff = Infinity;
 
     currentNode.neighbors.forEach((nbId) => {
       const nb = this.nodes.get(nbId)!;
       const dLat = nb.lat - currentNode.lat;
       const dLon = nb.lon - currentNode.lon;
+      if (dLat === 0 && dLon === 0) return;
 
-      let score = -1;
-      if (direction === 'ArrowUp' && dLat > 0) score = dLat;
-      if (direction === 'ArrowDown' && dLat < 0) score = -dLat;
-      if (direction === 'ArrowRight' && dLon > 0) score = dLon;
-      if (direction === 'ArrowLeft' && dLon < 0) score = -dLon;
+      const angle = Math.atan2(dLat, dLon);
+      let diff = Math.abs(angle - target);
+      if (diff > Math.PI) diff = 2 * Math.PI - diff;
 
-      if (score > bestScore) {
-        bestScore = score;
+      // Accept neighbors within 90° cone
+      if (diff < Math.PI / 2 && diff < bestAngleDiff) {
+        bestAngleDiff = diff;
         bestNeighbor = nbId;
       }
     });
