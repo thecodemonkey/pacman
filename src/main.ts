@@ -6,7 +6,7 @@ import { GameEngine } from './game/engine';
 let map: L.Map;
 let streetLayer: L.TileLayer;
 let satelliteLayer: L.TileLayer;
-let currentTheme: 'street' | 'pacman' | 'satellite' = 'pacman';
+let currentTheme: 'street' | 'pacman' | 'satellite' = 'street';
 let userPos: [number, number] = [51.505, -0.09];
 let currentRotation = 0;
 let activeKey: 'ArrowUp'|'ArrowDown'|'ArrowLeft'|'ArrowRight' | null = null;
@@ -118,7 +118,7 @@ function initMap(lat: number, lon: number) {
   streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
   satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}');
 
-  document.getElementById('map')?.classList.add('theme-pacman');
+  document.getElementById('map')?.classList.add('theme-street');
 
   // Setup canvas overlay
   canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
@@ -214,7 +214,7 @@ function switchCity(lat: number, lon: number) {
 }
 
 // --- View Toggle ---
-HUD.viewToggle.innerText = 'Tech-Man View';
+HUD.viewToggle.innerText = 'Street View';
 HUD.viewToggle.addEventListener('click', () => {
   const mapEl = document.getElementById('map');
   if (!mapEl) return;
@@ -314,7 +314,7 @@ function cacheStreetEdges() {
 
 function spawnGhosts() {
   ghosts.length = 0;
-  const colors = ['#ff0000', '#ffb8ff', '#00ffff', '#ffb852'];
+  const colors = ['#ff0000', '#ffb8ff', '#00ffff', '#ffb852', '#ff6600', '#66ff33', '#ff33cc', '#33ccff'];
   const nodes = Array.from(engine.getNodes().values()).filter(n => n.neighbors.length > 0);
   if (nodes.length === 0) return;
 
