@@ -217,6 +217,18 @@ body {
   }
 }
 
+/* Joystick */
+#joystick-canvas {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  z-index: 2000;
+  touch-action: none;
+  width: 120px;
+  height: 120px;
+  cursor: pointer;
+}
+
 /* Mobile Adjustments */
 @media (max-width: 600px) {
   #hud {
@@ -228,5 +240,12 @@ body {
 
   .value {
     font-size: 16px;
+  }
+
+  #joystick-canvas {
+    width: 150px;
+    height: 150px;
+    bottom: 30px;
+    right: 30px;
   }
 }

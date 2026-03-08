@@ -835,6 +835,7 @@ function gameLoop(time: number) {
 }
 
 function setupInput() {
+  // --- Keyboard (desktop only) ---
   window.addEventListener('keydown', (e) => {
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
       e.preventDefault();
@@ -848,31 +849,213 @@ function setupInput() {
     }
   });
 
-  let touchStartX = 0;
-  let touchStartY = 0;
+  // --- Canvas Joystick ---
+  const joyCanvas = document.getElementById('joystick-canvas') as HTMLCanvasElement;
+  const jCtx = joyCanvas.getContext('2d')!;
+  let joystickActive = false;
+  const deadzone = 0.15; // fraction of baseRadius
 
-  window.addEventListener('touchstart', (e) => {
-    touchStartX = e.touches[0].clientX;
-    touchStartY = e.touches[0].clientY;
-  });
+  // Target knob position (where input points)
+  let knobTargetX = 0;
+  let knobTargetY = 0;
+  // Current smooth knob position
+  let knobX = 0;
+  let knobY = 0;
 
-  window.addEventListener('touchmove', (e) => {
-    const touchX = e.touches[0].clientX;
-    const touchY = e.touches[0].clientY;
-    const dx = touchX - touchStartX;
-    const dy = touchY - touchStartY;
+  function sizeJoystickCanvas() {
+    const rect = joyCanvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    joyCanvas.width = rect.width * dpr;
+    joyCanvas.height = rect.height * dpr;
+    jCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  sizeJoystickCanvas();
+  window.addEventListener('resize', sizeJoystickCanvas);
 
-    if (Math.abs(dx) > 20 || Math.abs(dy) > 20) {
+  function getJoySize() {
+    const rect = joyCanvas.getBoundingClientRect();
+    const cx = rect.width / 2;
+    const cy = rect.height / 2;
+    const baseR = cx - 4;
+    const knobR = baseR * 0.35;
+    const maxTravel = baseR - knobR - 2;
+    return { cx, cy, baseR, knobR, maxTravel };
+  }
+
+  function drawArrow(ax: number, ay: number, angle: number, size: number, alpha: number) {
+    jCtx.save();
+    jCtx.translate(ax, ay);
+    jCtx.rotate(angle);
+    jCtx.beginPath();
+    jCtx.moveTo(0, -size);
+    jCtx.lineTo(-size * 0.6, size * 0.3);
+    jCtx.lineTo(size * 0.6, size * 0.3);
+    jCtx.closePath();
+    jCtx.fillStyle = `rgba(255, 210, 47, ${alpha})`;
+    jCtx.fill();
+    jCtx.restore();
+  }
+
+  function drawJoystick() {
+    const rect = joyCanvas.getBoundingClientRect();
+    const w = rect.width;
+    const h = rect.height;
+    const { cx, cy, baseR, knobR } = getJoySize();
+
+    jCtx.clearRect(0, 0, w, h);
+
+    // Base ring — more visible
+    jCtx.beginPath();
+    jCtx.arc(cx, cy, baseR, 0, Math.PI * 2);
+    jCtx.fillStyle = 'rgba(20, 20, 30, 0.85)';
+    jCtx.fill();
+    jCtx.strokeStyle = 'rgba(255, 210, 47, 0.35)';
+    jCtx.lineWidth = 2;
+    jCtx.stroke();
+
+    // Directional arrows
+    const arrowDist = baseR * 0.72;
+    const mainSize = baseR * 0.14;
+    const diagSize = baseR * 0.09;
+    const mainAlpha = 0.3;
+    const diagAlpha = 0.15;
+
+    // Cardinal arrows (up, right, down, left)
+    drawArrow(cx, cy - arrowDist, 0, mainSize, mainAlpha);               // up
+    drawArrow(cx + arrowDist, cy, Math.PI / 2, mainSize, mainAlpha);     // right
+    drawArrow(cx, cy + arrowDist, Math.PI, mainSize, mainAlpha);         // down
+    drawArrow(cx - arrowDist, cy, -Math.PI / 2, mainSize, mainAlpha);    // left
+
+    // Diagonal arrows (smaller, dimmer)
+    const diagDist = arrowDist * 0.9;
+    const d = diagDist * 0.707; // cos(45°)
+    drawArrow(cx + d, cy - d, Math.PI / 4, diagSize, diagAlpha);        // up-right
+    drawArrow(cx + d, cy + d, Math.PI * 3 / 4, diagSize, diagAlpha);    // down-right
+    drawArrow(cx - d, cy + d, -Math.PI * 3 / 4, diagSize, diagAlpha);   // down-left
+    drawArrow(cx - d, cy - d, -Math.PI / 4, diagSize, diagAlpha);       // up-left
+
+    // Knob
+    const kx = cx + knobX;
+    const ky = cy + knobY;
+
+    // Knob glow
+    jCtx.beginPath();
+    jCtx.arc(kx, ky, knobR + 4, 0, Math.PI * 2);
+    jCtx.fillStyle = joystickActive
+      ? 'rgba(255, 210, 47, 0.15)'
+      : 'rgba(255, 210, 47, 0.05)';
+    jCtx.fill();
+
+    // Knob body
+    const knobGrad = jCtx.createRadialGradient(kx - knobR * 0.25, ky - knobR * 0.25, 0, kx, ky, knobR);
+    knobGrad.addColorStop(0, 'rgba(255, 225, 80, 0.85)');
+    knobGrad.addColorStop(1, 'rgba(255, 190, 30, 0.65)');
+    jCtx.beginPath();
+    jCtx.arc(kx, ky, knobR, 0, Math.PI * 2);
+    jCtx.fillStyle = knobGrad;
+    jCtx.fill();
+    jCtx.strokeStyle = 'rgba(255, 210, 47, 0.8)';
+    jCtx.lineWidth = 2;
+    jCtx.stroke();
+
+    // Knob highlight
+    jCtx.beginPath();
+    jCtx.arc(kx - knobR * 0.2, ky - knobR * 0.2, knobR * 0.35, 0, Math.PI * 2);
+    jCtx.fillStyle = 'rgba(255, 255, 255, 0.25)';
+    jCtx.fill();
+  }
+
+  // Smooth animation loop for joystick
+  function joystickLoop() {
+    requestAnimationFrame(joystickLoop);
+
+    // Smooth lerp towards target
+    const lerp = joystickActive ? 0.3 : 0.15;
+    knobX += (knobTargetX - knobX) * lerp;
+    knobY += (knobTargetY - knobY) * lerp;
+
+    // Snap to zero when close enough
+    if (!joystickActive && Math.abs(knobX) < 0.5 && Math.abs(knobY) < 0.5) {
+      knobX = 0;
+      knobY = 0;
+    }
+
+    drawJoystick();
+  }
+  requestAnimationFrame(joystickLoop);
+
+  function handleInput(clientX: number, clientY: number) {
+    const rect = joyCanvas.getBoundingClientRect();
+    const { cx, cy, maxTravel, baseR } = getJoySize();
+    let dx = (clientX - rect.left) - cx;
+    let dy = (clientY - rect.top) - cy;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist > maxTravel) {
+      dx = (dx / dist) * maxTravel;
+      dy = (dy / dist) * maxTravel;
+    }
+
+    knobTargetX = dx;
+    knobTargetY = dy;
+
+    // Direction from deadzone
+    const normalizedDist = dist / baseR;
+    if (normalizedDist > deadzone) {
       if (Math.abs(dx) > Math.abs(dy)) {
         activeKey = dx > 0 ? 'ArrowRight' : 'ArrowLeft';
       } else {
         activeKey = dy > 0 ? 'ArrowDown' : 'ArrowUp';
       }
+    } else {
+      activeKey = null;
     }
+  }
+
+  function resetJoystick() {
+    joystickActive = false;
+    knobTargetX = 0;
+    knobTargetY = 0;
+    activeKey = null;
+  }
+
+  // Mouse events
+  joyCanvas.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    joystickActive = true;
+    handleInput(e.clientX, e.clientY);
   });
 
-  window.addEventListener('touchend', () => {
-    activeKey = null;
+  window.addEventListener('mousemove', (e) => {
+    if (!joystickActive) return;
+    e.preventDefault();
+    handleInput(e.clientX, e.clientY);
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (joystickActive) resetJoystick();
+  });
+
+  // Touch events
+  joyCanvas.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    joystickActive = true;
+    handleInput(e.touches[0].clientX, e.touches[0].clientY);
+  }, { passive: false });
+
+  joyCanvas.addEventListener('touchmove', (e) => {
+    if (!joystickActive) return;
+    e.preventDefault();
+    handleInput(e.touches[0].clientX, e.touches[0].clientY);
+  }, { passive: false });
+
+  joyCanvas.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    resetJoystick();
+  }, { passive: false });
+
+  joyCanvas.addEventListener('touchcancel', () => {
+    resetJoystick();
   });
 
   requestAnimationFrame(gameLoop);
