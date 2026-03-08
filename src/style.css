@@ -389,6 +389,8 @@ body {
   width: 120px;
   height: 120px;
   cursor: pointer;
+  max-height: calc(50vh - 40px);
+  max-width: calc(50vw - 40px);
 }
 
 /* Mobile Adjustments */
@@ -407,7 +409,9 @@ body {
   #joystick-canvas {
     width: 150px;
     height: 150px;
-    bottom: 30px;
-    right: 30px;
+    bottom: env(safe-area-inset-bottom, 20px);
+    right: 20px;
+    max-height: calc(40dvh - 20px);
+    max-width: calc(50vw - 20px);
   }
 }
