@@ -44,26 +44,48 @@ const HUD = {
 
 // --- Custom Icons ---
 const pacmanIcon = L.divIcon({
-  className: 'pacman-container',
-  html: '<div class="pacman"><div class="pacman-eye"></div></div>',
-  iconSize: [60, 60],
-  iconAnchor: [30, 30],
+  className: 'nerd-container',
+  html: `
+    <div class="nerd">
+      <div class="nerd-face">
+        <div class="nerd-hair">
+          <div class="nerd-spike"></div>
+          <div class="nerd-spike"></div>
+          <div class="nerd-spike"></div>
+          <div class="nerd-spike"></div>
+        </div>
+        <div class="nerd-glasses">
+          <div class="nerd-lens"></div>
+          <div class="nerd-bridge"></div>
+          <div class="nerd-lens"></div>
+        </div>
+        <div class="nerd-mouth"></div>
+      </div>
+    </div>
+  `,
+  iconSize: [48, 48],
+  iconAnchor: [24, 24],
 });
 
-function createGhostIcon(color: string) {
-  const blinkDelay = (Math.random() * 5).toFixed(2);
+function createBotIcon(color: string) {
+  const d1 = (Math.random() * 4).toFixed(2);
+  const d2 = (Math.random() * 4 + 0.4).toFixed(2);
   return L.divIcon({
-    className: 'ghost-container',
+    className: 'bot-container',
     html: `
-      <div class="ghost" style="background: ${color}">
-        <div class="ghost-eyes" style="animation: blink 4s infinite ${blinkDelay}s; transform-origin: center;">
-          <div class="eye"></div>
-          <div class="eye"></div>
+      <div class="bot-antenna">
+        <div class="bot-antenna-ball"></div>
+      </div>
+      <div class="bot-head" style="background:${color}">
+        <div class="bot-eyes">
+          <div class="bot-eye" style="animation-delay:${d1}s"></div>
+          <div class="bot-eye" style="animation-delay:${d2}s"></div>
         </div>
+        <div class="bot-mouth"></div>
       </div>
     `,
-    iconSize: [44, 50],
-    iconAnchor: [22, 25],
+    iconSize: [32, 42],
+    iconAnchor: [16, 21],
   });
 }
 
@@ -243,7 +265,7 @@ function spawnGhosts() {
   colors.forEach((color, i) => {
     const randNode = nodes[Math.floor(Math.random() * nodes.length)];
     const marker = L.marker([randNode.lat, randNode.lon], {
-      icon: createGhostIcon(color),
+      icon: createBotIcon(color),
       zIndexOffset: 900,
     }).addTo(map);
 
@@ -363,7 +385,7 @@ function updatePacmanRotation(cId: string, tId: string) {
   const p2 = map.project([tNode.lat, tNode.lon], map.getMaxZoom());
   const dx = p2.x - p1.x;
   const dy = p2.y - p1.y;
-  
+
   if (dx === 0 && dy === 0) return;
 
   const targetRotation = Math.atan2(dy, dx) * 180 / Math.PI;
@@ -372,17 +394,11 @@ function updatePacmanRotation(cId: string, tId: string) {
   diff = ((diff % 360) + 540) % 360 - 180;
   currentRotation += diff;
 
-  const isFlipped = Math.abs(currentRotation % 360) > 90 && Math.abs(currentRotation % 360) < 270;
-
   const el = pacmanMarker.getElement();
   if (el) {
-    const inner = el.querySelector('.pacman') as HTMLElement;
+    const inner = el.querySelector('.nerd-face') as HTMLElement;
     if (inner) {
       inner.style.transform = `rotate(${currentRotation}deg)`;
-    }
-    const eye = el.querySelector('.pacman-eye') as HTMLElement;
-    if (eye) {
-      eye.style.top = isFlipped ? '40px' : '12px';
     }
   }
 }
@@ -470,26 +486,29 @@ function pacmanLoop(time: number) {
 
   // Process Ghost Movements
   ghosts.forEach(ghost => {
-     const cNodeFinal = engine.getNodes().get(ghost.currentNodeId);
-     const tNodeFinal = engine.getNodes().get(ghost.targetNodeId);
+     const cNodeStart = engine.getNodes().get(ghost.currentNodeId);
+     const tNodeStart = engine.getNodes().get(ghost.targetNodeId);
      // Guard: skip this ghost if either node is missing from the graph
-     if (!cNodeFinal || !tNodeFinal) return;
+     if (!cNodeStart || !tNodeStart) return;
 
      // Speed of ghosts: 15m/s
-     const dist = map.distance([cNodeFinal.lat, cNodeFinal.lon], [tNodeFinal.lat, tNodeFinal.lon]);
+     const dist = map.distance([cNodeStart.lat, cNodeStart.lon], [tNodeStart.lat, tNodeStart.lon]);
      // Guard: avoid division by zero on collapsed edges
-     const durationMs = dist > 0 ? (dist / 15) * 1000 : 1000;
+     const durationMs = dist > 0 ? (dist / 15) * 1000 : 500;
 
      ghost.progress += dt / durationMs;
 
-     if (ghost.progress >= 1) {
-         ghost.progress = Math.max(0, ghost.progress - 1); // Keep remainder for smooth overflow
+     // Use a WHILE loop to handle large dt values (e.g. low FPS, tab in background).
+     // A plain 'if' only handles one node transition per frame — if progress overshoots
+     // past 2.0 the ghost would be rendered far outside any road segment.
+     while (ghost.progress >= 1) {
+         ghost.progress -= 1;
          const prev = ghost.currentNodeId;
          ghost.currentNodeId = ghost.targetNodeId;
          ghost.prevNodeId = prev;
-         
+
          const node = engine.getNodes().get(ghost.currentNodeId);
-         if (!node) return;
+         if (!node || node.neighbors.length === 0) { ghost.progress = 0; break; }
 
          // Prevent backtracking if possible, but always keep at least one option
          let validNeighbors = node.neighbors;
@@ -500,15 +519,19 @@ function pacmanLoop(time: number) {
          ghost.targetNodeId = validNeighbors[Math.floor(Math.random() * validNeighbors.length)];
      }
 
+     // Clamp progress to [0, 1] so ghosts NEVER extrapolate outside the
+     // current→target edge. This is the key guard against off-road rendering.
+     const renderProgress = Math.min(Math.max(ghost.progress, 0), 1);
+
      const cNode = engine.getNodes().get(ghost.currentNodeId);
      const tNode = engine.getNodes().get(ghost.targetNodeId);
      if (!cNode || !tNode) return;
-     
+
      const p1 = map.project([cNode.lat, cNode.lon], map.getMaxZoom());
      const p2 = map.project([tNode.lat, tNode.lon], map.getMaxZoom());
-     const pxX = p1.x + (p2.x - p1.x) * ghost.progress;
-     const pxY = p1.y + (p2.y - p1.y) * ghost.progress;
-     
+     const pxX = p1.x + (p2.x - p1.x) * renderProgress;
+     const pxY = p1.y + (p2.y - p1.y) * renderProgress;
+
      const ghostLatLng = map.unproject([pxX, pxY], map.getMaxZoom());
      ghost.marker.setLatLng(ghostLatLng);
   });

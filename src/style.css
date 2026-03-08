@@ -34,6 +34,7 @@ body {
   width: 100%;
   height: 100%;
   background: #000;
+  outline: none; /* suppress focus ring from tabindex */
 }
 
 /* Base Streets / Items */
@@ -120,117 +121,238 @@ body {
 }
 
 /* Characters */
-.pacman-container {
-  width: 60px;
-  height: 60px;
-  position: relative;
-  filter: drop-shadow(0px 0px 2px #837600) drop-shadow(0px 8px 16px rgba(0, 0, 0, 0.6));
-  z-index: 1000 !important;
-}
 
+/* Death blink animation — reused for the player character */
 @keyframes pacman-flash {
   0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0; transform: scale(0.8); }
+  50%       { opacity: 0; transform: scale(0.8); }
 }
-
 .pacman-blink {
   animation: pacman-flash 0.3s ease-in-out infinite;
 }
 
-.pacman {
-  width: 100%;
-  height: 100%;
-  background: #ffde00;
-  /* Richer yellow */
-  border-radius: 50%;
-  animation: eat 0.25s infinite alternate linear;
+/* ===========================
+   Nerd Player Character
+   =========================== */
+
+/* Outer wrapper — Leaflet uses transform on this for lat/lng positioning.
+   DO NOT add transform-based animations here! */
+.nerd-container {
+  width: 48px;
+  height: 48px;
   position: relative;
+  z-index: 1000 !important;
+  filter: drop-shadow(0px 3px 8px rgba(0,0,0,0.55));
 }
 
-.pacman-eye {
-  content: '';
-  position: absolute;
-  width: 8px;
-  height: 8px;
-  background: #000;
-  border-radius: 50%;
-  top: 12px;
-  left: 32px;
-}
-
-@keyframes eat {
-  0% {
-    clip-path: polygon(100% 25%, 50% 50%, 100% 75%, 100% 100%, 0% 100%, 0% 0%, 100% 0%);
-  }
-
-  100% {
-    clip-path: polygon(100% 50%, 50% 50%, 100% 50%, 100% 100%, 0% 100%, 0% 0%, 100% 0%);
-  }
-}
-
-.ghost-container {
-  width: 44px;
-  height: 50px;
-  position: relative;
-  filter: drop-shadow(0px 0px 2px #626262) drop-shadow(0px 2px 4px rgba(0, 0, 0, 0.5));
-  z-index: 900 !important;
-}
-
-.ghost {
-  width: 100%;
-  height: 38px;
-  border-top-left-radius: 22px;
-  border-top-right-radius: 22px;
-  position: relative;
-}
-
-.ghost::after {
-  content: '';
-  position: absolute;
-  bottom: -12px;
-  left: 0;
-  width: 100%;
-  height: 12px;
-  background: inherit;
-  clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 80% 80%, 60% 100%, 40% 80%, 20% 100%, 0% 80%);
-}
-
-.ghost-eyes {
-  position: absolute;
-  top: 12px;
-  left: 6px;
-  right: 6px;
+/* Bounce layer — separate from container so it doesn't conflict with Leaflet */
+.nerd {
+  width: 48px;
+  height: 48px;
   display: flex;
-  justify-content: space-around;
+  align-items: center;
+  justify-content: center;
+  animation: nerd-bounce 0.35s ease-in-out infinite alternate;
+}
+@keyframes nerd-bounce {
+  0%   { transform: translateY(0px);  }
+  100% { transform: translateY(-2px); }
 }
 
-.eye {
-  width: 10px;
-  height: 10px;
-  background: white;
+/* Visual face — JS applies rotate(Xdeg) here */
+.nerd-face {
+  width: 44px;
+  height: 44px;
+  background: #ffc84a;
   border-radius: 50%;
   position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
 }
 
-.eye::after {
+/* Face sheen highlight */
+.nerd-face::before {
+  content: '';
+  position: absolute;
+  top: 6px;
+  left: 8px;
+  width: 10px;
+  height: 7px;
+  background: rgba(255,255,255,0.25);
+  border-radius: 50%;
+  transform: rotate(-30deg);
+  pointer-events: none;
+}
+
+/* Hair */
+.nerd-hair {
+  position: absolute;
+  top: 3px;
+  display: flex;
+  gap: 2px;
+  align-items: flex-end;
+}
+.nerd-spike {
+  width: 5px;
+  background: #3d1f00;
+  border-radius: 3px 3px 1px 1px;
+}
+.nerd-spike:nth-child(1) { height: 9px;  transform: rotate(-18deg); }
+.nerd-spike:nth-child(2) { height: 12px; }
+.nerd-spike:nth-child(3) { height: 10px; transform: rotate(10deg); }
+.nerd-spike:nth-child(4) { height: 7px;  transform: rotate(22deg); }
+
+/* Glasses row */
+.nerd-glasses {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+/* Nose bridge */
+.nerd-bridge {
+  width: 4px;
+  height: 2px;
+  background: #5c3300;
+  border-radius: 1px;
+  margin-bottom: 1px;
+  flex-shrink: 0;
+}
+/* Lens */
+.nerd-lens {
+  width: 14px;
+  height: 11px;
+  border-radius: 40%;
+  background: rgba(100,190,255,0.3);
+  border: 2px solid #5c3300;
+  position: relative;
+  flex-shrink: 0;
+}
+/* Pupil */
+.nerd-lens::after {
   content: '';
   position: absolute;
   width: 5px;
   height: 5px;
-  background: blue;
+  background: #111;
   border-radius: 50%;
-  top: 2px;
-  left: 2px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
 }
 
-@keyframes blink {
-  0%, 94%, 98%, 100% {
-    transform: scaleY(1);
-  }
+/* Smile */
+.nerd-mouth {
+  width: 15px;
+  height: 6px;
+  border-radius: 0 0 10px 10px;
+  background: white;
+  border: 2px solid #c07800;
+  border-top: none;
+}
 
-  96% {
-    transform: scaleY(0.1);
-  }
+/* ===========================
+   Bot (Enemy Robot) Characters
+   Original design — no resemblance to any existing IP
+   =========================== */
+
+.bot-container {
+  width: 32px;
+  height: 42px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  z-index: 900 !important;
+  filter: drop-shadow(0px 3px 6px rgba(0, 0, 0, 0.6));
+}
+
+/* Antenna stem */
+.bot-antenna {
+  width: 2px;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.4);
+  position: relative;
+  display: flex;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* Antenna tip ball */
+.bot-antenna-ball {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: white;
+  position: absolute;
+  top: -3px;
+  left: 50%;
+  transform: translateX(-50%);
+  animation: bot-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes bot-pulse {
+  0%, 100% { opacity: 1;   transform: translateX(-50%) scale(1);   }
+  50%       { opacity: 0.4; transform: translateX(-50%) scale(0.6); }
+}
+
+/* Main robot head — solid color filled */
+.bot-head {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px 7px 4px 4px;
+  /* background color set inline via the bot's own color */
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+/* Eye row */
+.bot-eyes {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+/* Dark square eyes — visible on solid color background */
+.bot-eye {
+  width: 8px;
+  height: 5px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.7);
+  position: relative;
+  animation: bot-blink 4s ease-in-out infinite;
+}
+
+/* White dot highlight inside eye */
+.bot-eye::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 3px;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 1px;
+}
+
+@keyframes bot-blink {
+  0%, 88%, 96%, 100% { transform: scaleY(1);    }
+  92%                 { transform: scaleY(0.05); }
+}
+
+/* Simple mouth — small dark rectangle */
+.bot-mouth {
+  width: 14px;
+  height: 3px;
+  border-radius: 1px;
+  background: rgba(0, 0, 0, 0.55);
 }
 
 /* Glassmorphism HUD */

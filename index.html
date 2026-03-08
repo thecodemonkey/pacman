@@ -8,7 +8,7 @@
   </head>
   <body>
     <div id="app">
-      <div id="map"></div>
+      <div id="map" tabindex="0" autofocus></div>
       <div id="hud" class="glass">
         <div class="hud-item">
           <span class="label">SCORE</span>
@@ -18,7 +18,7 @@
           <span class="label">LIVES</span>
           <div id="lives" class="value">❤❤❤</div>
         </div>
-        <button id="view-toggle" class="glass-btn">Satellite View</button>
+        <button id="view-toggle" class="glass-btn" onclick="this.blur()">Satellite View</button>
       </div>
     </div>
 
@@ -26,7 +26,7 @@
       <div class="game-over-modal">
         <h1 class="game-over-title">GAME OVER</h1>
         <p class="game-over-score">Score: <span id="final-score">0</span></p>
-        <button id="btn-restart" class="pacman-btn">Try Again</button>
+        <button id="btn-restart" class="pacman-btn" onclick="this.blur()">Try Again</button>
       </div>
     </div>
 
