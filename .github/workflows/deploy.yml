@@ -17,18 +17,13 @@ jobs:
           password: ${{ secrets.PASSWORD }}
           port: ${{ secrets.PORT }}
           script: |
-            IMAGE_TAG="${{ github.event.client_payload.image_tag }}"
-            # Pull new image
-            docker pull ghcr.io/thecodemonkey/pacman:"$IMAGE_TAG"
-
-            # Stop and remove existing container
+            # Stop existing container
             docker stop pacman || true
-            docker rm pacman || true
 
-            # Run new container
+            # Remove all stopped containers, unused images, networks, etc.
+            docker system prune -af
+
+            # Run new container with latest image
             docker run -d --name pacman \
               -p 7172:80 \
-              ghcr.io/thecodemonkey/pacman:"$IMAGE_TAG"
-
-            # Cleanup old images, behalte nur die letzten 3
-            # docker images -q ghcr.io/thecodemonkey/pacman | tail -n +4 | xargs -r docker rmi -f
+              ghcr.io/thecodemonkey/pacman:latest
