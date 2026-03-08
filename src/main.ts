@@ -214,7 +214,7 @@ function switchCity(lat: number, lon: number) {
 }
 
 // --- View Toggle ---
-HUD.viewToggle.innerText = 'Pac-Man View';
+HUD.viewToggle.innerText = 'Tech-Man View';
 HUD.viewToggle.addEventListener('click', () => {
   const mapEl = document.getElementById('map');
   if (!mapEl) return;
@@ -235,7 +235,7 @@ HUD.viewToggle.addEventListener('click', () => {
     streetLayer.addTo(map);
   } else {
     currentTheme = 'pacman';
-    HUD.viewToggle.innerText = 'Pac-Man View';
+    HUD.viewToggle.innerText = 'Tech-Man View';
     mapEl.classList.remove('theme-street');
     mapEl.classList.add('theme-pacman');
     if (!map.hasLayer(streetLayer)) {
