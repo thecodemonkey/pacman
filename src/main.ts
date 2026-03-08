@@ -236,7 +236,9 @@ function renderDots() {
 
 function spawnGhosts() {
   const colors = ['#ff0000', '#ffb8ff', '#00ffff', '#ffb852'];
-  const nodes = Array.from(engine.getNodes().values());
+  // Only spawn on nodes that have at least one neighbor — otherwise ghost can never move
+  const nodes = Array.from(engine.getNodes().values()).filter(n => n.neighbors.length > 0);
+  if (nodes.length === 0) return;
 
   colors.forEach((color, i) => {
     const randNode = nodes[Math.floor(Math.random() * nodes.length)];
@@ -245,8 +247,7 @@ function spawnGhosts() {
       zIndexOffset: 900,
     }).addTo(map);
 
-    let nextId = randNode.neighbors[Math.floor(Math.random() * randNode.neighbors.length)];
-    if (!nextId) nextId = randNode.id;
+    const nextId = randNode.neighbors[Math.floor(Math.random() * randNode.neighbors.length)];
 
     ghosts.push({
       id: `ghost_${i}`,
@@ -462,9 +463,6 @@ function pacmanLoop(time: number) {
        
        const pacLatLng = map.unproject([pxX, pxY], map.getMaxZoom());
        
-       const pacEl = pacmanMarker.getElement();
-       if (pacEl) pacEl.style.transition = 'none';
-
        pacmanMarker.setLatLng(pacLatLng);
        map.panInside(pacLatLng, { padding: [250, 250], animate: false });
     }
@@ -472,31 +470,39 @@ function pacmanLoop(time: number) {
 
   // Process Ghost Movements
   ghosts.forEach(ghost => {
+     const cNodeFinal = engine.getNodes().get(ghost.currentNodeId);
+     const tNodeFinal = engine.getNodes().get(ghost.targetNodeId);
+     // Guard: skip this ghost if either node is missing from the graph
+     if (!cNodeFinal || !tNodeFinal) return;
+
      // Speed of ghosts: 15m/s
-     const cNodeFinal = engine.getNodes().get(ghost.currentNodeId)!;
-     const tNodeFinal = engine.getNodes().get(ghost.targetNodeId)!;
      const dist = map.distance([cNodeFinal.lat, cNodeFinal.lon], [tNodeFinal.lat, tNodeFinal.lon]);
-     const durationMs = (dist / 15) * 1000;
+     // Guard: avoid division by zero on collapsed edges
+     const durationMs = dist > 0 ? (dist / 15) * 1000 : 1000;
 
      ghost.progress += dt / durationMs;
 
      if (ghost.progress >= 1) {
-         ghost.progress -= 1; // Keep remainder for smooth overflow
+         ghost.progress = Math.max(0, ghost.progress - 1); // Keep remainder for smooth overflow
          const prev = ghost.currentNodeId;
          ghost.currentNodeId = ghost.targetNodeId;
          ghost.prevNodeId = prev;
          
-         const node = engine.getNodes().get(ghost.currentNodeId)!;
+         const node = engine.getNodes().get(ghost.currentNodeId);
+         if (!node) return;
+
+         // Prevent backtracking if possible, but always keep at least one option
          let validNeighbors = node.neighbors;
-         // Prevent backtracking if possible
-         if (validNeighbors.length > 1 && ghost.prevNodeId) {
-           validNeighbors = validNeighbors.filter(n => n !== ghost.prevNodeId);
+         if (ghost.prevNodeId) {
+           const filtered = validNeighbors.filter(n => n !== ghost.prevNodeId);
+           if (filtered.length > 0) validNeighbors = filtered;
          }
-         ghost.targetNodeId = validNeighbors[Math.floor(Math.random() * validNeighbors.length)] || node.id;
+         ghost.targetNodeId = validNeighbors[Math.floor(Math.random() * validNeighbors.length)];
      }
 
-     const cNode = engine.getNodes().get(ghost.currentNodeId)!;
-     const tNode = engine.getNodes().get(ghost.targetNodeId)!;
+     const cNode = engine.getNodes().get(ghost.currentNodeId);
+     const tNode = engine.getNodes().get(ghost.targetNodeId);
+     if (!cNode || !tNode) return;
      
      const p1 = map.project([cNode.lat, cNode.lon], map.getMaxZoom());
      const p2 = map.project([tNode.lat, tNode.lon], map.getMaxZoom());
@@ -508,22 +514,31 @@ function pacmanLoop(time: number) {
   });
 
   // 3. Check Real-Time Collisions
-  if (isRespawning || isGameOver) return; 
-  
+  if (isRespawning || isGameOver) return;
+
   const pacPos = pacmanMarker.getLatLng();
   if (!pacPos) return;
-  const pxPac = map.project(pacPos, map.getMaxZoom());
 
+  // Project both positions at the CURRENT zoom level so the pixel distance
+  // directly matches what is visible on screen. Pac-Man icon = 60×60px (anchor 30,30),
+  // Ghost icon = 44×50px (anchor 22,25). Sum of half-widths ≈ 52px → use 40px to be
+  // slightly forgiving but not too generous.
+  const currentZoom = map.getZoom();
+  const pxPac = map.project(pacPos, currentZoom);
+
+  // Collision threshold in screen pixels (squared)
+  const COLLISION_PX = 40;
+  const COLLISION_SQ = COLLISION_PX * COLLISION_PX;
+
+  let collisionThisFrame = false;
   ghosts.forEach((ghost) => {
+     if (collisionThisFrame) return; // Only trigger once per frame
      const ghostPos = ghost.marker.getLatLng();
      if (ghostPos) {
-       const pxGhost = map.project(ghostPos, map.getMaxZoom());
-       
-       // Calculate true pixel distance on the maximum zoom mapped screen projection
+       const pxGhost = map.project(ghostPos, currentZoom);
        const distSq = Math.pow(pxPac.x - pxGhost.x, 2) + Math.pow(pxPac.y - pxGhost.y, 2);
-       
-       // 20 pixels overlap threshold. Let's use 20^2 = 400 pixels distance on max zoom (19).
-       if (distSq < 420) { 
+       if (distSq < COLLISION_SQ) {
+          collisionThisFrame = true;
           if (engine.loseLife()) {
              showGameOver();
           } else {
