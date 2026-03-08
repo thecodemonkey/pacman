@@ -7,8 +7,7 @@ let map: L.Map;
 let streetLayer: L.TileLayer;
 let satelliteLayer: L.TileLayer;
 let currentTheme: 'street' | 'pacman' | 'satellite' = 'pacman';
-let pacmanMarker: L.Marker;
-let userPos: [number, number] = [51.505, -0.09]; // Default London
+let userPos: [number, number] = [51.505, -0.09];
 let currentRotation = 0;
 let activeKey: 'ArrowUp'|'ArrowDown'|'ArrowLeft'|'ArrowRight' | null = null;
 let pacCurrentNodeId: string | null = null;
@@ -17,20 +16,41 @@ let pacProgress = 0;
 let lastFrameTime = 0;
 let isGameOver = false;
 let isRespawning = false;
+let respawnBlinkOn = true;
+let respawnTimer = 0;
 const pacSpeed = 80; // m/s
 
 const engine = new GameEngine();
-const dotMarkers: Map<string, L.CircleMarker> = new Map();
+
+// Canvas + context
+let canvas: HTMLCanvasElement;
+let ctx: CanvasRenderingContext2D;
+
+// Pac-Man position in lat/lng (interpolated)
+let pacLatLng: L.LatLng | null = null;
+
+// Cached street edges
+let streetEdges: Array<{ aLat: number; aLon: number; bLat: number; bLon: number }> = [];
 
 interface GhostState {
   id: string;
-  marker: L.Marker;
+  color: string;
   currentNodeId: string;
   targetNodeId: string;
   prevNodeId: string | null;
   progress: number;
+  lat: number;
+  lon: number;
+  blinkTimer: number;
+  blinkDuration: number;
+  isBlinking: boolean;
+  shape: number;
 }
 const ghosts: GhostState[] = [];
+
+// Mouth animation state
+let mouthAngle = 0;
+let mouthOpening = true;
 
 const HUD = {
   score: document.getElementById('score') as HTMLElement,
@@ -42,51 +62,39 @@ const HUD = {
   btnRestart: document.getElementById('btn-restart') as HTMLButtonElement,
 };
 
-// --- Custom Icons ---
-const pacmanIcon = L.divIcon({
-  className: 'nerd-container',
-  html: `
-    <div class="nerd">
-      <div class="nerd-face">
-        <div class="nerd-hair">
-          <div class="nerd-spike"></div>
-          <div class="nerd-spike"></div>
-          <div class="nerd-spike"></div>
-          <div class="nerd-spike"></div>
-        </div>
-        <div class="nerd-glasses">
-          <div class="nerd-lens"></div>
-          <div class="nerd-bridge"></div>
-          <div class="nerd-lens"></div>
-        </div>
-        <div class="nerd-mouth"></div>
-      </div>
-    </div>
-  `,
-  iconSize: [48, 48],
-  iconAnchor: [24, 24],
-});
-
-function createBotIcon(color: string) {
-  const d1 = (Math.random() * 4).toFixed(2);
-  const d2 = (Math.random() * 4 + 0.4).toFixed(2);
-  return L.divIcon({
-    className: 'bot-container',
-    html: `
-      <div class="bot-antenna">
-        <div class="bot-antenna-ball"></div>
-      </div>
-      <div class="bot-head" style="background:${color}">
-        <div class="bot-eyes">
-          <div class="bot-eye" style="animation-delay:${d1}s"></div>
-          <div class="bot-eye" style="animation-delay:${d2}s"></div>
-        </div>
-        <div class="bot-mouth"></div>
-      </div>
-    `,
-    iconSize: [32, 42],
-    iconAnchor: [16, 21],
-  });
+// --- Theme colors ---
+function getThemeColors() {
+  if (currentTheme === 'pacman') {
+    return {
+      streetGlow: '#1919A6',
+      streetGlowWidth: 18,
+      streetGlowShadow: 4,
+      streetInner: '#000000',
+      streetInnerWidth: 12,
+      streetInnerAlpha: 1,
+      dotColor: '#ffb852',
+    };
+  } else if (currentTheme === 'satellite') {
+    return {
+      streetGlow: '#00d2ff',
+      streetGlowWidth: 18,
+      streetGlowShadow: 12,
+      streetInner: '#0b0c10',
+      streetInnerWidth: 14,
+      streetInnerAlpha: 0.75,
+      dotColor: '#ffffff',
+    };
+  } else {
+    return {
+      streetGlow: '#ffffff',
+      streetGlowWidth: 14,
+      streetGlowShadow: 0,
+      streetInner: '#00d2ff',
+      streetInnerWidth: 8,
+      streetInnerAlpha: 0.8,
+      dotColor: '#ffb852',
+    };
+  }
 }
 
 // --- Map Initialization ---
@@ -96,6 +104,11 @@ function initMap(lat: number, lon: number) {
   map = L.map('map', {
     zoomControl: false,
     attributionControl: false,
+    keyboard: false,
+    dragging: false,
+    scrollWheelZoom: false,
+    doubleClickZoom: false,
+    touchZoom: false,
   }).setView(userPos, 19);
 
   streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
@@ -103,13 +116,25 @@ function initMap(lat: number, lon: number) {
 
   document.getElementById('map')?.classList.add('theme-pacman');
 
-  pacmanMarker = L.marker(userPos, {
-    icon: pacmanIcon,
-    zIndexOffset: 1000,
-  }).addTo(map);
+  // Setup canvas overlay
+  canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
+  ctx = canvas.getContext('2d')!;
+  resizeCanvas();
+  window.addEventListener('resize', () => { resizeCanvas(); drawFrame(); });
+  map.on('move zoom moveend zoomend resize zoomanim', () => { resizeCanvas(); drawFrame(); });
 
   setupInput();
   fetchNearbyStreets(lat, lon);
+}
+
+function resizeCanvas() {
+  const mapEl = document.getElementById('map')!;
+  const w = mapEl.clientWidth;
+  const h = mapEl.clientHeight;
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
 }
 
 // --- Geolocation ---
@@ -198,22 +223,21 @@ function processOSMData(data: any) {
 
   const pacNode = engine.getPacmanNode();
   if (pacNode) {
-    pacmanMarker.setLatLng([pacNode.lat, pacNode.lon]);
+    pacLatLng = L.latLng(pacNode.lat, pacNode.lon);
     map.setView([pacNode.lat, pacNode.lon], 19);
   }
 
-  renderStreets();
-  renderDots();
+  cacheStreetEdges();
   spawnGhosts();
 
   HUD.loading.classList.add('hidden');
   HUD.loading.style.display = 'none';
 }
 
-function renderStreets() {
+function cacheStreetEdges() {
+  streetEdges = [];
   const drawnEdges = new Set<string>();
   const nodes = engine.getNodes();
-  const multiCoords: L.LatLngExpression[][] = [];
 
   nodes.forEach(node => {
     node.neighbors.forEach(neighborId => {
@@ -222,62 +246,36 @@ function renderStreets() {
         drawnEdges.add(edgeId);
         const nb = nodes.get(neighborId);
         if (nb) {
-          multiCoords.push([[node.lat, node.lon], [nb.lat, nb.lon]]);
+          streetEdges.push({ aLat: node.lat, aLon: node.lon, bLat: nb.lat, bLon: nb.lon });
         }
       }
     });
   });
-
-  // Background Glow + Border
-  L.polyline(multiCoords, {
-    className: 'street-glow',
-    lineCap: 'round',
-    lineJoin: 'round'
-  }).addTo(map);
-
-  // Inner Semi-Transparent Core
-  L.polyline(multiCoords, {
-    className: 'street-inner',
-    lineCap: 'round',
-    lineJoin: 'round'
-  }).addTo(map);
-}
-
-function renderDots() {
-  dotMarkers.forEach(m => map.removeLayer(m));
-  dotMarkers.clear();
-
-  engine.getDots().forEach(dot => {
-    const marker = L.circleMarker([dot.lat, dot.lon], {
-      radius: 4,
-      className: 'pacman-dot'
-    }).addTo(map);
-    dotMarkers.set(dot.id, marker);
-  });
 }
 
 function spawnGhosts() {
+  ghosts.length = 0;
   const colors = ['#ff0000', '#ffb8ff', '#00ffff', '#ffb852'];
-  // Only spawn on nodes that have at least one neighbor — otherwise ghost can never move
   const nodes = Array.from(engine.getNodes().values()).filter(n => n.neighbors.length > 0);
   if (nodes.length === 0) return;
 
   colors.forEach((color, i) => {
     const randNode = nodes[Math.floor(Math.random() * nodes.length)];
-    const marker = L.marker([randNode.lat, randNode.lon], {
-      icon: createBotIcon(color),
-      zIndexOffset: 900,
-    }).addTo(map);
-
     const nextId = randNode.neighbors[Math.floor(Math.random() * randNode.neighbors.length)];
 
     ghosts.push({
       id: `ghost_${i}`,
-      marker,
+      color,
       currentNodeId: randNode.id,
       targetNodeId: nextId,
       prevNodeId: null,
-      progress: 0
+      progress: 0,
+      lat: randNode.lat,
+      lon: randNode.lon,
+      blinkTimer: Math.random() * 3000 + 1500,
+      blinkDuration: 0,
+      isBlinking: false,
+      shape: i % 4,
     });
   });
 }
@@ -297,23 +295,19 @@ function resetGameParams() {
   pacCurrentNodeId = null;
   pacTargetNodeId = null;
   pacProgress = 0;
-  
+
   HUD.gameOverScreen.classList.add('hidden');
-  
-  // Clear all ghosts
-  ghosts.forEach(g => map.removeLayer(g.marker));
+
   ghosts.length = 0;
 
-  // Reset Pac-Man visually
   const nearestNode = engine.findNearestNode(userPos[0], userPos[1]);
   engine.setInitialPacmanPosition(nearestNode);
   const pacNode = engine.getPacmanNode();
   if (pacNode) {
-    pacmanMarker.setLatLng([pacNode.lat, pacNode.lon]);
+    pacLatLng = L.latLng(pacNode.lat, pacNode.lon);
     map.setView([pacNode.lat, pacNode.lon], 19);
   }
 
-  renderDots();
   updateHUD();
   spawnGhosts();
   lastFrameTime = 0;
@@ -327,38 +321,23 @@ function triggerRespawn() {
   isRespawning = true;
   lastFrameTime = 0;
   activeKey = null;
+  respawnTimer = 0;
+  respawnBlinkOn = true;
 
-  // Clear ghosts immediately so they don't keep moving/colliding during the animation
-  ghosts.forEach(g => map.removeLayer(g.marker));
   ghosts.length = 0;
-  
   updateHUD();
 
-  const el = pacmanMarker.getElement();
-  if (el) {
-    el.style.transition = 'none';
-    el.classList.add('pacman-blink'); // 1. Blink at collision spot
-  }
-
-  // 2. Wait 2 seconds while blinking at the death location
   setTimeout(() => {
-    if (el) {
-      el.classList.remove('pacman-blink');
-    }
-
-    // 3. Teleport back to spawn safely and quickly
     pacCurrentNodeId = engine.getInitialPacmanNodeId();
     pacTargetNodeId = null;
     pacProgress = 0;
-    
+
     const initNode = engine.getNodes().get(pacCurrentNodeId)!;
     engine.setPacmanPosition(pacCurrentNodeId);
-    pacmanMarker.setLatLng([initNode.lat, initNode.lon]);
-    
-    // Pan the camera quickly to the spawn point
+    pacLatLng = L.latLng(initNode.lat, initNode.lon);
+
     map.panTo([initNode.lat, initNode.lon], { animate: true, duration: 0.5 });
 
-    // 4. Wait for the quick pan to finish, then resume game
     setTimeout(() => {
        if (!isGameOver) {
          spawnGhosts();
@@ -366,16 +345,13 @@ function triggerRespawn() {
          lastFrameTime = performance.now();
        }
     }, 600);
-
   }, 2000);
 }
-
-// removed moveGhostLoop
 
 function updateHUD() {
   const state = engine.getState();
   HUD.score.innerText = state.score.toString().padStart(4, '0');
-  HUD.lives.innerText = '❤'.repeat(state.lives);
+  HUD.lives.innerText = '\u2764'.repeat(state.lives);
 }
 
 function updatePacmanRotation(cId: string, tId: string) {
@@ -389,24 +365,333 @@ function updatePacmanRotation(cId: string, tId: string) {
   if (dx === 0 && dy === 0) return;
 
   const targetRotation = Math.atan2(dy, dx) * 180 / Math.PI;
-
   let diff = targetRotation - currentRotation;
   diff = ((diff % 360) + 540) % 360 - 180;
   currentRotation += diff;
+}
 
-  const el = pacmanMarker.getElement();
-  if (el) {
-    const inner = el.querySelector('.nerd-face') as HTMLElement;
-    if (inner) {
-      inner.style.transform = `rotate(${currentRotation}deg)`;
+// =============================================
+//  CANVAS DRAWING
+// =============================================
+
+function toPoint(lat: number, lon: number): L.Point {
+  return map.latLngToContainerPoint([lat, lon]);
+}
+
+function drawStreets() {
+  const colors = getThemeColors();
+
+  // Glow pass
+  ctx.save();
+  ctx.strokeStyle = colors.streetGlow;
+  ctx.lineWidth = colors.streetGlowWidth;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  if (colors.streetGlowShadow > 0) {
+    ctx.shadowColor = colors.streetGlow;
+    ctx.shadowBlur = colors.streetGlowShadow;
+  }
+  ctx.beginPath();
+  for (const edge of streetEdges) {
+    const a = toPoint(edge.aLat, edge.aLon);
+    const b = toPoint(edge.bLat, edge.bLon);
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+  }
+  ctx.stroke();
+  ctx.restore();
+
+  // Inner pass
+  ctx.save();
+  ctx.strokeStyle = colors.streetInner;
+  ctx.lineWidth = colors.streetInnerWidth;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.globalAlpha = colors.streetInnerAlpha;
+  ctx.beginPath();
+  for (const edge of streetEdges) {
+    const a = toPoint(edge.aLat, edge.aLon);
+    const b = toPoint(edge.bLat, edge.bLon);
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawDots() {
+  const colors = getThemeColors();
+  const dots = engine.getDots();
+  ctx.save();
+  ctx.fillStyle = colors.dotColor;
+  ctx.globalAlpha = 0.9;
+  ctx.font = 'bold 12px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  let i = 0;
+  for (const dot of dots) {
+    const p = toPoint(dot.lat, dot.lon);
+    ctx.fillText(i % 2 === 0 ? '0' : '1', p.x, p.y);
+    i++;
+  }
+  ctx.restore();
+}
+
+function drawPacman() {
+  if (!pacLatLng) return;
+
+  // Respawn blink
+  if (isRespawning) {
+    respawnTimer++;
+    if (respawnTimer % 10 === 0) respawnBlinkOn = !respawnBlinkOn;
+    if (!respawnBlinkOn) return;
+  }
+
+  const p = toPoint(pacLatLng.lat, pacLatLng.lng);
+  const radius = 22;
+  const rot = (currentRotation * Math.PI) / 180;
+
+  // Animate mouth
+  if (activeKey) {
+    if (mouthOpening) {
+      mouthAngle += 0.08;
+      if (mouthAngle >= 0.85) mouthOpening = false;
+    } else {
+      mouthAngle -= 0.08;
+      if (mouthAngle <= 0.05) mouthOpening = true;
+    }
+  } else {
+    mouthAngle += (0.15 - mouthAngle) * 0.1;
+  }
+
+  // Teeth geometry
+  const teethCount = 7;
+  const teethStart = -radius + 2;
+  const teethEnd = radius - 2;
+  const teethStep = (teethEnd - teethStart) / teethCount;
+
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.rotate(rot);
+
+  // --- Upper jaw ---
+  ctx.save();
+  ctx.rotate(-mouthAngle);
+
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.arc(0, 0, radius, -Math.PI, 0);
+  ctx.closePath();
+  ctx.fillStyle = '#141c28';
+  ctx.fill();
+  ctx.strokeStyle = '#ffd22f';
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
+
+  // Hood accent
+  ctx.beginPath();
+  ctx.arc(0, 0, radius - 4, -2.6, -0.5);
+  ctx.strokeStyle = '#ffdd66';
+  ctx.lineWidth = 1.5;
+  ctx.globalAlpha = 0.75;
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  // Upper teeth
+  ctx.beginPath();
+  ctx.moveTo(teethStart, 0);
+  for (let i = 0; i < teethCount; i++) {
+    const x1 = teethStart + i * teethStep + teethStep * 0.5;
+    const x2 = teethStart + (i + 1) * teethStep;
+    ctx.lineTo(x1, 5);
+    ctx.lineTo(x2, 0);
+  }
+  ctx.fillStyle = 'white';
+  ctx.globalAlpha = 0.9;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  // --- Lower jaw ---
+  ctx.save();
+  ctx.rotate(mouthAngle);
+
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.arc(0, 0, radius, 0, Math.PI);
+  ctx.closePath();
+  ctx.fillStyle = '#141c28';
+  ctx.fill();
+  ctx.strokeStyle = '#ffd22f';
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
+
+  // Lower teeth
+  ctx.beginPath();
+  ctx.moveTo(teethStart, 0);
+  for (let i = 0; i < teethCount; i++) {
+    const x1 = teethStart + i * teethStep + teethStep * 0.5;
+    const x2 = teethStart + (i + 1) * teethStep;
+    ctx.lineTo(x1, -5);
+    ctx.lineTo(x2, 0);
+  }
+  ctx.fillStyle = 'white';
+  ctx.globalAlpha = 0.9;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  // Subtle glow
+  ctx.shadowColor = 'rgba(255, 210, 47, 0.3)';
+  ctx.shadowBlur = 8;
+  ctx.beginPath();
+  ctx.arc(0, 0, radius, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(255, 210, 47, 0.15)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // --- X-eye: always stays on top regardless of rotation ---
+  // Draw in screen space — fixed position above head center
+  ctx.save();
+  ctx.rotate(-rot); // undo body rotation to get screen-aligned coords
+  ctx.strokeStyle = '#ffd22f';
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = 'round';
+  ctx.shadowColor = 'rgba(255, 210, 47, 0.85)';
+  ctx.shadowBlur = 4;
+  const eyeScreenX = 3;
+  const eyeScreenY = -10;
+  ctx.beginPath();
+  ctx.moveTo(eyeScreenX - 4, eyeScreenY - 4);
+  ctx.lineTo(eyeScreenX + 4, eyeScreenY + 4);
+  ctx.moveTo(eyeScreenX + 4, eyeScreenY - 4);
+  ctx.lineTo(eyeScreenX - 4, eyeScreenY + 4);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.restore();
+
+  ctx.restore();
+}
+
+// Simple bot eyes with random blink
+function drawBotEyes(eyeX1: number, eyeX2: number, eyeY: number, r: number, blinking: boolean) {
+  for (const ex of [eyeX1, eyeX2]) {
+    if (blinking) {
+      // Closed eye — horizontal line
+      ctx.beginPath();
+      ctx.moveTo(ex - r, eyeY);
+      ctx.lineTo(ex + r, eyeY);
+      ctx.strokeStyle = '#1a1a2e';
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+    } else {
+      // White sclera
+      ctx.beginPath();
+      ctx.arc(ex, eyeY, r, 0, Math.PI * 2);
+      ctx.fillStyle = 'white';
+      ctx.fill();
+      // Pupil
+      ctx.beginPath();
+      ctx.arc(ex, eyeY, r * 0.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#1a1a2e';
+      ctx.fill();
+      // Highlight
+      ctx.beginPath();
+      ctx.arc(ex - r * 0.25, eyeY - r * 0.3, r * 0.22, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      ctx.fill();
     }
   }
 }
 
-function pacmanLoop(time: number) {
-  requestAnimationFrame(pacmanLoop);
+function drawGhosts() {
+  for (const ghost of ghosts) {
+    const p = toPoint(ghost.lat, ghost.lon);
+    const color = ghost.color;
+
+    ctx.save();
+    ctx.translate(p.x, p.y);
+
+    // Drop shadow
+    ctx.shadowColor = 'rgba(0,0,0,0.35)';
+    ctx.shadowBlur = 5;
+    ctx.shadowOffsetY = 2;
+
+    if (ghost.shape === 0) {
+      // --- Dome bot: antenna ball + dome + side ears ---
+      ctx.beginPath();
+      ctx.moveTo(0, -20); ctx.lineTo(0, -28);
+      ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, -31, 4, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill();
+      for (const s of [-1, 1]) { ctx.beginPath(); ctx.roundRect(s * 17, -6, 5, 14, 3); ctx.fillStyle = color; ctx.fill(); }
+      ctx.beginPath();
+      ctx.arc(0, 0, 18, Math.PI, 0);
+      ctx.lineTo(18, 10); ctx.quadraticCurveTo(18, 16, 12, 16);
+      ctx.lineTo(-12, 16); ctx.quadraticCurveTo(-18, 16, -18, 10);
+      ctx.closePath(); ctx.fillStyle = color; ctx.fill();
+      ctx.shadowBlur = 0;
+      drawBotEyes(-7, 7, 2, 6, ghost.isBlinking);
+
+    } else if (ghost.shape === 1) {
+      // --- Square bot: antenna + boxy head + side ears ---
+      ctx.beginPath();
+      ctx.moveTo(0, -18); ctx.lineTo(0, -26);
+      ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, -28, 4, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill();
+      for (const s of [-1, 1]) { ctx.beginPath(); ctx.roundRect(s * 16, -6, 5, 12, 2); ctx.fillStyle = color; ctx.fill(); }
+      ctx.beginPath(); ctx.roundRect(-16, -18, 32, 34, 6); ctx.fillStyle = color; ctx.fill();
+      ctx.shadowBlur = 0;
+      drawBotEyes(-6, 6, -2, 5, ghost.isBlinking);
+
+    } else if (ghost.shape === 2) {
+      // --- Round bot: V-antenna + circle head + ear bumps ---
+      for (const s of [-1, 1]) {
+        ctx.beginPath(); ctx.moveTo(s * 4, -16); ctx.lineTo(s * 10, -28);
+        ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.stroke();
+        ctx.beginPath(); ctx.arc(s * 10, -30, 3, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill();
+      }
+      ctx.beginPath(); ctx.arc(0, 0, 18, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill();
+      for (const s of [-1, 1]) { ctx.beginPath(); ctx.arc(s * 18, 0, 4, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill(); }
+      ctx.shadowBlur = 0;
+      drawBotEyes(-7, 7, -2, 6, ghost.isBlinking);
+
+    } else {
+      // --- TV bot: rabbit-ear antenna + wide rectangle head ---
+      for (const s of [-1, 1]) {
+        ctx.beginPath(); ctx.moveTo(s * 4, -16); ctx.lineTo(s * 10, -30);
+        ctx.strokeStyle = color; ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.stroke();
+        ctx.beginPath(); ctx.arc(s * 10, -31, 3, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill();
+      }
+      ctx.beginPath(); ctx.roundRect(-18, -16, 36, 28, 5); ctx.fillStyle = color; ctx.fill();
+      ctx.shadowBlur = 0;
+      drawBotEyes(-6, 6, -4, 5, ghost.isBlinking);
+    }
+
+    ctx.restore();
+  }
+}
+
+function drawFrame() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  drawStreets();
+  drawDots();
+  drawGhosts();
+  drawPacman();
+}
+
+// =============================================
+//  GAME LOOP
+// =============================================
+
+function gameLoop(time: number) {
+  requestAnimationFrame(gameLoop);
+
+  drawFrame();
+
   if (isGameOver || isRespawning) { lastFrameTime = 0; return; }
-  
+
   if (!lastFrameTime) { lastFrameTime = time; return; }
   const dt = time - lastFrameTime;
   lastFrameTime = time;
@@ -417,7 +702,7 @@ function pacmanLoop(time: number) {
     else return;
   }
 
-  // 1. If not moving, try to start moving
+  // 1. Start moving
   if (!pacTargetNodeId && activeKey) {
     pacTargetNodeId = engine.getNextNode(pacCurrentNodeId, activeKey);
     if (pacTargetNodeId) {
@@ -426,13 +711,11 @@ function pacmanLoop(time: number) {
     }
   }
 
-  // 2. If moving, interpolate
+  // 2. Interpolate movement
   if (pacTargetNodeId) {
-    // Check if user is actively reversing direction
     if (activeKey) {
       const idealNextFromTarget = engine.getNextNode(pacTargetNodeId, activeKey);
       if (idealNextFromTarget === pacCurrentNodeId) {
-         // Swap direction mid-edge!
          const temp = pacTargetNodeId;
          pacTargetNodeId = pacCurrentNodeId;
          pacCurrentNodeId = temp;
@@ -446,19 +729,13 @@ function pacmanLoop(time: number) {
        const tNode = engine.getNodes().get(pacTargetNodeId)!;
        const dist = map.distance([cNode.lat, cNode.lon], [tNode.lat, tNode.lon]);
        const durationMs = (dist / pacSpeed) * 1000;
-       
+
        pacProgress += dt / durationMs;
-       
+
        if (pacProgress >= 1) {
           pacProgress = 1;
           pacCurrentNodeId = pacTargetNodeId;
           engine.setPacmanPosition(pacCurrentNodeId);
-          
-          const dot = dotMarkers.get(pacCurrentNodeId);
-          if (dot) {
-            map.removeLayer(dot);
-            dotMarkers.delete(pacCurrentNodeId);
-          }
           updateHUD();
 
           pacTargetNodeId = engine.getNextNode(pacCurrentNodeId, activeKey);
@@ -468,39 +745,42 @@ function pacmanLoop(time: number) {
           }
        }
 
-       // Render interpolation on the projected Cartesian plane to exactly match straight map lines
        const cNodeFinal = engine.getNodes().get(pacCurrentNodeId)!;
        const tNodeFinal = engine.getNodes().get(pacTargetNodeId || pacCurrentNodeId)!;
-       
+
        const p1 = map.project([cNodeFinal.lat, cNodeFinal.lon], map.getMaxZoom());
        const p2 = map.project([tNodeFinal.lat, tNodeFinal.lon], map.getMaxZoom());
        const pxX = p1.x + (p2.x - p1.x) * pacProgress;
        const pxY = p1.y + (p2.y - p1.y) * pacProgress;
-       
-       const pacLatLng = map.unproject([pxX, pxY], map.getMaxZoom());
-       
-       pacmanMarker.setLatLng(pacLatLng);
+
+       pacLatLng = map.unproject([pxX, pxY], map.getMaxZoom());
        map.panInside(pacLatLng, { padding: [250, 250], animate: false });
     }
   }
 
-  // Process Ghost Movements
+  // 3. Ghost movement
   ghosts.forEach(ghost => {
+     // Blink timer
+     ghost.blinkTimer -= dt;
+     if (ghost.blinkTimer <= 0) {
+       if (ghost.isBlinking) {
+         ghost.isBlinking = false;
+         ghost.blinkTimer = Math.random() * 3000 + 2000;
+       } else {
+         ghost.isBlinking = true;
+         ghost.blinkTimer = 120 + Math.random() * 80;
+       }
+     }
+
      const cNodeStart = engine.getNodes().get(ghost.currentNodeId);
      const tNodeStart = engine.getNodes().get(ghost.targetNodeId);
-     // Guard: skip this ghost if either node is missing from the graph
      if (!cNodeStart || !tNodeStart) return;
 
-     // Speed of ghosts: 15m/s
      const dist = map.distance([cNodeStart.lat, cNodeStart.lon], [tNodeStart.lat, tNodeStart.lon]);
-     // Guard: avoid division by zero on collapsed edges
      const durationMs = dist > 0 ? (dist / 15) * 1000 : 500;
 
      ghost.progress += dt / durationMs;
 
-     // Use a WHILE loop to handle large dt values (e.g. low FPS, tab in background).
-     // A plain 'if' only handles one node transition per frame — if progress overshoots
-     // past 2.0 the ghost would be rendered far outside any road segment.
      while (ghost.progress >= 1) {
          ghost.progress -= 1;
          const prev = ghost.currentNodeId;
@@ -510,7 +790,6 @@ function pacmanLoop(time: number) {
          const node = engine.getNodes().get(ghost.currentNodeId);
          if (!node || node.neighbors.length === 0) { ghost.progress = 0; break; }
 
-         // Prevent backtracking if possible, but always keep at least one option
          let validNeighbors = node.neighbors;
          if (ghost.prevNodeId) {
            const filtered = validNeighbors.filter(n => n !== ghost.prevNodeId);
@@ -519,55 +798,38 @@ function pacmanLoop(time: number) {
          ghost.targetNodeId = validNeighbors[Math.floor(Math.random() * validNeighbors.length)];
      }
 
-     // Clamp progress to [0, 1] so ghosts NEVER extrapolate outside the
-     // current→target edge. This is the key guard against off-road rendering.
      const renderProgress = Math.min(Math.max(ghost.progress, 0), 1);
-
      const cNode = engine.getNodes().get(ghost.currentNodeId);
      const tNode = engine.getNodes().get(ghost.targetNodeId);
      if (!cNode || !tNode) return;
 
-     const p1 = map.project([cNode.lat, cNode.lon], map.getMaxZoom());
-     const p2 = map.project([tNode.lat, tNode.lon], map.getMaxZoom());
-     const pxX = p1.x + (p2.x - p1.x) * renderProgress;
-     const pxY = p1.y + (p2.y - p1.y) * renderProgress;
-
-     const ghostLatLng = map.unproject([pxX, pxY], map.getMaxZoom());
-     ghost.marker.setLatLng(ghostLatLng);
+     const gp1 = map.project([cNode.lat, cNode.lon], map.getMaxZoom());
+     const gp2 = map.project([tNode.lat, tNode.lon], map.getMaxZoom());
+     const gpxX = gp1.x + (gp2.x - gp1.x) * renderProgress;
+     const gpxY = gp1.y + (gp2.y - gp1.y) * renderProgress;
+     const ghostLatLng = map.unproject([gpxX, gpxY], map.getMaxZoom());
+     ghost.lat = ghostLatLng.lat;
+     ghost.lon = ghostLatLng.lng;
   });
 
-  // 3. Check Real-Time Collisions
-  if (isRespawning || isGameOver) return;
+  // 4. Collision detection
+  if (isRespawning || isGameOver || !pacLatLng) return;
 
-  const pacPos = pacmanMarker.getLatLng();
-  if (!pacPos) return;
-
-  // Project both positions at the CURRENT zoom level so the pixel distance
-  // directly matches what is visible on screen. Pac-Man icon = 60×60px (anchor 30,30),
-  // Ghost icon = 44×50px (anchor 22,25). Sum of half-widths ≈ 52px → use 40px to be
-  // slightly forgiving but not too generous.
-  const currentZoom = map.getZoom();
-  const pxPac = map.project(pacPos, currentZoom);
-
-  // Collision threshold in screen pixels (squared)
-  const COLLISION_PX = 40;
-  const COLLISION_SQ = COLLISION_PX * COLLISION_PX;
+  const pxPac = toPoint(pacLatLng.lat, pacLatLng.lng);
+  const COLLISION_SQ = 35 * 35;
 
   let collisionThisFrame = false;
   ghosts.forEach((ghost) => {
-     if (collisionThisFrame) return; // Only trigger once per frame
-     const ghostPos = ghost.marker.getLatLng();
-     if (ghostPos) {
-       const pxGhost = map.project(ghostPos, currentZoom);
-       const distSq = Math.pow(pxPac.x - pxGhost.x, 2) + Math.pow(pxPac.y - pxGhost.y, 2);
-       if (distSq < COLLISION_SQ) {
-          collisionThisFrame = true;
-          if (engine.loseLife()) {
-             showGameOver();
-          } else {
-             triggerRespawn();
-          }
-       }
+     if (collisionThisFrame) return;
+     const pxGhost = toPoint(ghost.lat, ghost.lon);
+     const distSq = (pxPac.x - pxGhost.x) ** 2 + (pxPac.y - pxGhost.y) ** 2;
+     if (distSq < COLLISION_SQ) {
+        collisionThisFrame = true;
+        if (engine.loseLife()) {
+           showGameOver();
+        } else {
+           triggerRespawn();
+        }
      }
   });
 }
@@ -599,7 +861,7 @@ function setupInput() {
     const touchY = e.touches[0].clientY;
     const dx = touchX - touchStartX;
     const dy = touchY - touchStartY;
-    
+
     if (Math.abs(dx) > 20 || Math.abs(dy) > 20) {
       if (Math.abs(dx) > Math.abs(dy)) {
         activeKey = dx > 0 ? 'ArrowRight' : 'ArrowLeft';
@@ -613,7 +875,7 @@ function setupInput() {
     activeKey = null;
   });
 
-  requestAnimationFrame(pacmanLoop);
+  requestAnimationFrame(gameLoop);
 }
 
 // Initialize
