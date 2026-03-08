@@ -96,7 +96,7 @@ function getThemeColors() {
       streetInner: '#00d2ff',
       streetInnerWidth: 8,
       streetInnerAlpha: 0.8,
-      dotColor: '#ffb852',
+      dotColor: '#000000',
     };
   }
 }
