@@ -60,6 +60,10 @@ const HUD = {
   gameOverScreen: document.getElementById('game-over-screen') as HTMLElement,
   finalScore: document.getElementById('final-score') as HTMLElement,
   btnRestart: document.getElementById('btn-restart') as HTMLButtonElement,
+  startScreen: document.getElementById('start-screen') as HTMLElement,
+  btnStart: document.getElementById('btn-start') as HTMLButtonElement,
+  citySelect: document.getElementById('city-select') as HTMLSelectElement,
+  hudCitySelect: document.getElementById('hud-city-select') as HTMLSelectElement,
 };
 
 // --- Theme colors ---
@@ -154,6 +158,61 @@ function getLocation() {
   }
 }
 
+// --- Start Screen ---
+function setupStartScreen() {
+  const radios = document.querySelectorAll<HTMLInputElement>('input[name="loc-mode"]');
+  const labels = document.querySelectorAll<HTMLLabelElement>('.start-radio');
+
+  radios.forEach(radio => {
+    radio.addEventListener('change', () => {
+      labels.forEach(l => l.classList.remove('selected'));
+      const parent = radio.closest('.start-radio');
+      if (parent) parent.classList.add('selected');
+      HUD.citySelect.disabled = radio.value !== 'city';
+    });
+  });
+
+  HUD.btnStart.addEventListener('click', () => {
+    const mode = document.querySelector<HTMLInputElement>('input[name="loc-mode"]:checked')!.value;
+    HUD.startScreen.classList.add('hidden');
+    HUD.loading.classList.remove('hidden');
+    HUD.loading.style.display = '';
+
+    if (mode === 'city' && HUD.citySelect.value) {
+      const [lat, lon] = HUD.citySelect.value.split(',').map(Number);
+      HUD.hudCitySelect.value = HUD.citySelect.value;
+      initMap(lat, lon);
+    } else {
+      HUD.hudCitySelect.value = '';
+      getLocation();
+    }
+  });
+}
+
+// --- Switch City (HUD) ---
+function switchCity(lat: number, lon: number) {
+  HUD.loading.classList.remove('hidden');
+  HUD.loading.style.display = '';
+
+  engine.resetGame();
+  isGameOver = false;
+  isRespawning = false;
+  activeKey = null;
+  pacCurrentNodeId = null;
+  pacTargetNodeId = null;
+  pacProgress = 0;
+  lastFrameTime = 0;
+  ghosts.length = 0;
+  streetEdges = [];
+  pacLatLng = null;
+  HUD.gameOverScreen.classList.add('hidden');
+  updateHUD();
+
+  userPos = [lat, lon];
+  map.setView(userPos, 19);
+  fetchNearbyStreets(lat, lon);
+}
+
 // --- View Toggle ---
 HUD.viewToggle.innerText = 'Pac-Man View';
 HUD.viewToggle.addEventListener('click', () => {
@@ -218,8 +277,8 @@ async function fetchNearbyStreets(lat: number, lon: number, retries = 3) {
 
 function processOSMData(data: any) {
   engine.buildGraph(data);
-  const nearestNode = engine.findNearestNode(userPos[0], userPos[1]);
-  engine.setInitialPacmanPosition(nearestNode);
+  const spawnNode = engine.findBestSpawnNode(userPos[0], userPos[1]);
+  engine.setInitialPacmanPosition(spawnNode);
 
   const pacNode = engine.getPacmanNode();
   if (pacNode) {
@@ -300,7 +359,7 @@ function resetGameParams() {
 
   ghosts.length = 0;
 
-  const nearestNode = engine.findNearestNode(userPos[0], userPos[1]);
+  const nearestNode = engine.findBestSpawnNode(userPos[0], userPos[1]);
   engine.setInitialPacmanPosition(nearestNode);
   const pacNode = engine.getPacmanNode();
   if (pacNode) {
@@ -315,6 +374,24 @@ function resetGameParams() {
 
 HUD.btnRestart.addEventListener('click', () => {
   resetGameParams();
+});
+
+HUD.hudCitySelect.addEventListener('change', () => {
+  const val = HUD.hudCitySelect.value;
+  if (val) {
+    const [lat, lon] = val.split(',').map(Number);
+    switchCity(lat, lon);
+  } else {
+    // "GPS" selected — re-geolocate
+    if (navigator.geolocation) {
+      HUD.loading.classList.remove('hidden');
+      HUD.loading.style.display = '';
+      navigator.geolocation.getCurrentPosition(
+        (pos) => switchCity(pos.coords.latitude, pos.coords.longitude),
+        () => switchCity(51.505, -0.09)
+      );
+    }
+  }
 });
 
 function triggerRespawn() {
@@ -1062,4 +1139,4 @@ function setupInput() {
 }
 
 // Initialize
-getLocation();
+setupStartScreen();

@@ -65,6 +65,8 @@ export class GameEngine {
   public resetGame() {
     this.dots.clear();
     this.nodes.forEach((_, id) => this.dots.add(id));
+    this.pacmanNodeId = "";
+    this.initialPacmanNodeId = "";
     this.state.score = 0;
     this.state.lives = 3;
     this.state.isGameOver = false;
@@ -89,6 +91,28 @@ export class GameEngine {
       }
     });
     return nearestId;
+  }
+
+  /**
+   * Find a good spawn node: an intersection (2+ neighbors) close to the target.
+   * Falls back to findNearestNode if no intersection is found.
+   */
+  public findBestSpawnNode(lat: number, lon: number): string {
+    let bestId = "";
+    let bestScore = -Infinity;
+
+    this.nodes.forEach((node) => {
+      if (node.neighbors.length < 2) return; // skip dead-ends
+      const dist = Math.sqrt(Math.pow(node.lat - lat, 2) + Math.pow(node.lon - lon, 2));
+      // Score: prefer more neighbors, penalize distance
+      const score = node.neighbors.length * 0.0001 - dist;
+      if (score > bestScore) {
+        bestScore = score;
+        bestId = node.id;
+      }
+    });
+
+    return bestId || this.findNearestNode(lat, lon);
   }
 
   public setInitialPacmanPosition(nodeId: string) {

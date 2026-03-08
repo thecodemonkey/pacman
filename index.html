@@ -20,6 +20,21 @@
           <div id="lives" class="value">❤❤❤</div>
         </div>
         <button id="view-toggle" class="glass-btn" onclick="this.blur()">Satellite View</button>
+        <select id="hud-city-select" class="glass-btn hud-select">
+          <option value="">GPS</option>
+          <option value="48.8566,2.3522">Paris</option>
+          <option value="40.7128,-74.006">New York</option>
+          <option value="51.5074,-0.1278">London</option>
+          <option value="-22.9068,-43.1729">Rio</option>
+          <option value="-33.8688,151.2093">Sydney</option>
+          <option value="35.6762,139.6503">Tokyo</option>
+          <option value="41.9028,12.4964">Rome</option>
+          <option value="52.52,13.405">Berlin</option>
+          <option value="55.7558,37.6173">Moscow</option>
+          <option value="37.5665,126.978">Seoul</option>
+          <option value="19.4326,-99.1332">Mexico City</option>
+          <option value="1.3521,103.8198">Singapore</option>
+        </select>
       </div>
 
       <!-- Joystick -->
@@ -34,7 +49,42 @@
       </div>
     </div>
 
-    <div id="loading-screen" class="glass">
+    <div id="start-screen">
+      <div class="start-modal">
+        <h1 class="start-title">PAC-MAN</h1>
+        <p class="start-subtitle">Choose your location</p>
+        <div class="start-options">
+          <label class="start-radio selected">
+            <input type="radio" name="loc-mode" value="gps" checked />
+            <span class="radio-mark"></span>
+            Current Position
+          </label>
+          <label class="start-radio">
+            <input type="radio" name="loc-mode" value="city" />
+            <span class="radio-mark"></span>
+            Choose City
+          </label>
+        </div>
+        <select id="city-select" class="glass-select" disabled>
+          <option value="">— Select City —</option>
+          <option value="48.8566,2.3522">Paris</option>
+          <option value="40.7128,-74.006">New York</option>
+          <option value="51.5074,-0.1278">London</option>
+          <option value="-22.9068,-43.1729">Rio de Janeiro</option>
+          <option value="-33.8688,151.2093">Sydney</option>
+          <option value="35.6762,139.6503">Tokyo</option>
+          <option value="41.9028,12.4964">Rome</option>
+          <option value="52.52,13.405">Berlin</option>
+          <option value="55.7558,37.6173">Moscow</option>
+          <option value="37.5665,126.978">Seoul</option>
+          <option value="19.4326,-99.1332">Mexico City</option>
+          <option value="1.3521,103.8198">Singapore</option>
+        </select>
+        <button id="btn-start" class="pacman-btn start-btn">GO</button>
+      </div>
+    </div>
+
+    <div id="loading-screen" class="glass hidden">
       <div class="loader"></div>
       <p>Detecting Geolocation & Loading Streets...</p>
     </div>

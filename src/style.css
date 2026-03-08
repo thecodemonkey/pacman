@@ -195,6 +195,10 @@ body {
   z-index: 2000;
 }
 
+#loading-screen.hidden {
+  display: none;
+}
+
 .loader {
   width: 48px;
   height: 48px;
@@ -215,6 +219,164 @@ body {
   100% {
     transform: rotate(360deg);
   }
+}
+
+/* Start Screen */
+#start-screen {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 4000;
+  transition: opacity 0.4s ease;
+}
+
+#start-screen.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.start-modal {
+  background: rgba(10, 10, 15, 0.9);
+  border: 2px solid #ffde00;
+  box-shadow: 0 0 30px rgba(255, 222, 0, 0.4), inset 0 0 30px rgba(255, 222, 0, 0.1);
+  border-radius: 16px;
+  padding: 40px 48px;
+  text-align: center;
+  color: white;
+  min-width: 320px;
+}
+
+.start-title {
+  color: #ffde00;
+  text-shadow: 0 0 10px #ffde00, 0 0 30px #ffde00;
+  font-size: 3rem;
+  margin: 0 0 4px;
+  letter-spacing: 6px;
+}
+
+.start-subtitle {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.9rem;
+  margin: 0 0 24px;
+  letter-spacing: 1px;
+}
+
+.start-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.start-radio {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 0.95rem;
+}
+
+.start-radio:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.start-radio.selected {
+  border-color: #ffde00;
+  background: rgba(255, 222, 0, 0.08);
+}
+
+.start-radio input[type="radio"] {
+  display: none;
+}
+
+.radio-mark {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-radius: 50%;
+  flex-shrink: 0;
+  position: relative;
+  transition: border-color 0.2s ease;
+}
+
+.start-radio.selected .radio-mark {
+  border-color: #ffde00;
+}
+
+.radio-mark::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ffde00;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.start-radio.selected .radio-mark::after {
+  opacity: 1;
+}
+
+.glass-select {
+  width: 100%;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  color: white;
+  font-size: 0.95rem;
+  font-family: inherit;
+  cursor: pointer;
+  margin-bottom: 20px;
+  appearance: none;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.glass-select:focus {
+  border-color: #ffde00;
+}
+
+.glass-select:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.glass-select option {
+  background: #1a1a1a;
+  color: white;
+}
+
+.start-btn {
+  width: 100%;
+  padding: 14px;
+  font-size: 1.3rem;
+  letter-spacing: 4px;
+}
+
+/* HUD city selector */
+.hud-select {
+  appearance: none;
+  font-size: 13px;
+  padding: 8px 12px;
+  max-width: 110px;
+}
+
+.hud-select option {
+  background: #1a1a1a;
+  color: white;
 }
 
 /* Joystick */
