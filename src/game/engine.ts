@@ -11,14 +11,18 @@ export interface GameState {
   score: number;
   lives: number;
   isGameOver: boolean;
+  powerUpActive: boolean;
+  powerUpEndTime: number;
 }
 
 export class GameEngine {
   private nodes: Map<string, GameNode> = new Map();
   private dots: Set<string> = new Set(); // Node IDs where dots are located
+  private powerItems: Set<string> = new Set(); // Node IDs for code blocks
+  private rocketItems: Set<string> = new Set(); // Node IDs for rocket items
   private pacmanNodeId: string = "";
   private initialPacmanNodeId: string = "";
-  private state: GameState = { score: 0, lives: 3, isGameOver: false };
+  private state: GameState = { score: 0, lives: 3, isGameOver: false, powerUpActive: false, powerUpEndTime: 0 };
 
   constructor() {}
 
@@ -56,20 +60,66 @@ export class GameEngine {
       }
     });
 
-    // 2. Initial dots - place on all nodes for now
+    // 2. Initial dots and power items
     this.nodes.forEach((_, id) => this.dots.add(id));
     
-    console.log(`Graph built with ${this.nodes.size} nodes.`);
+    // Randomly select 2-3 nodes to be power items (intersections only)
+    const intersections = Array.from(this.nodes.keys()).filter(id => this.nodes.get(id)!.neighbors.length > 2);
+    const count = Math.min(intersections.length, 3);
+    for (let i = 0; i < count; i++) {
+      const idx = Math.floor(Math.random() * intersections.length);
+      const id = intersections.splice(idx, 1)[0];
+      this.dots.delete(id);
+      this.powerItems.add(id);
+    }
+
+    // Randomly select 2-3 nodes to be rocket items
+    const possibleRocketNodes = Array.from(this.nodes.keys()).filter(id => !this.powerItems.has(id) && this.nodes.get(id)!.neighbors.length > 2);
+    const rocketCount = Math.min(possibleRocketNodes.length, 3);
+    for (let i = 0; i < rocketCount; i++) {
+      const idx = Math.floor(Math.random() * possibleRocketNodes.length);
+      const id = possibleRocketNodes.splice(idx, 1)[0];
+      this.dots.delete(id);
+      this.rocketItems.add(id);
+    }
+    
+    console.log(`Graph built with ${this.nodes.size} nodes, ${this.powerItems.size} power items, and ${this.rocketItems.size} rockets.`);
   }
 
   public resetGame() {
     this.dots.clear();
+    this.powerItems.clear();
+    this.rocketItems.clear();
     this.nodes.forEach((_, id) => this.dots.add(id));
+    
+    const intersections = Array.from(this.nodes.keys()).filter(id => this.nodes.get(id)!.neighbors.length > 2);
+    
+    // Power items
+    const powerCount = Math.min(intersections.length, 3);
+    const chosenIntersections = [...intersections];
+    for (let i = 0; i < powerCount; i++) {
+        const idx = Math.floor(Math.random() * chosenIntersections.length);
+        const id = chosenIntersections.splice(idx, 1)[0];
+        this.dots.delete(id);
+        this.powerItems.add(id);
+    }
+
+    // Rocket items
+    const rocketCount = Math.min(chosenIntersections.length, 3);
+    for (let i = 0; i < rocketCount; i++) {
+        const idx = Math.floor(Math.random() * chosenIntersections.length);
+        const id = chosenIntersections.splice(idx, 1)[0];
+        this.dots.delete(id);
+        this.rocketItems.add(id);
+    }
+
     this.pacmanNodeId = "";
     this.initialPacmanNodeId = "";
     this.state.score = 0;
     this.state.lives = 3;
     this.state.isGameOver = false;
+    this.state.powerUpActive = false;
+    this.state.powerUpEndTime = 0;
   }
 
   public loseLife(): boolean {
@@ -187,7 +237,31 @@ export class GameEngine {
     if (this.dots.has(nodeId)) {
       this.dots.delete(nodeId);
       this.state.score += 10;
+    } else if (this.powerItems.has(nodeId)) {
+      this.powerItems.delete(nodeId);
+      this.state.score += 50;
+      this.activatePowerUp();
+    } else if (this.rocketItems.has(nodeId)) {
+      this.rocketItems.delete(nodeId);
+      this.state.score += 100;
+      // Trigger event or callback for rocket launch
+      (window as any).dispatchGameEvent?.('launch-rocket');
     }
+  }
+
+  private activatePowerUp() {
+    this.state.powerUpActive = true;
+    this.state.powerUpEndTime = performance.now() + 20000; // 20 seconds
+  }
+
+  public updatePowerUp(now: number) {
+    if (this.state.powerUpActive && now > this.state.powerUpEndTime) {
+      this.state.powerUpActive = false;
+    }
+  }
+
+  public eatGhost() {
+    this.state.score += 200;
   }
 
   public getState() {
@@ -196,6 +270,14 @@ export class GameEngine {
 
   public getDots() {
     return Array.from(this.dots).map(id => this.nodes.get(id)!);
+  }
+
+  public getPowerItems() {
+    return Array.from(this.powerItems).map(id => this.nodes.get(id)!);
+  }
+
+  public getRocketItems() {
+    return Array.from(this.rocketItems).map(id => this.nodes.get(id)!);
   }
   
   public getPacmanNode() {

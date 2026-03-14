@@ -49,6 +49,37 @@ interface GhostState {
 }
 const ghosts: GhostState[] = [];
 
+interface Spark {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  color: string;
+}
+const sparks: Spark[] = [];
+
+interface FireParticle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+}
+const fireParticles: FireParticle[] = [];
+
+interface Rocket {
+  currentNodeId: string;
+  targetNodeId: string;
+  prevNodeId: string | null;
+  progress: number;
+  lat: number;
+  lon: number;
+  lifeTime: number; // ms
+  speed: number;
+}
+const rockets: Rocket[] = [];
+
 // Mouth animation state
 let mouthAngle = 0;
 let mouthOpening = true;
@@ -65,6 +96,8 @@ const HUD = {
   btnStart: document.getElementById('btn-start') as HTMLButtonElement,
   citySelect: document.getElementById('city-select') as HTMLSelectElement,
   hudCitySelect: document.getElementById('hud-city-select') as HTMLSelectElement,
+  powerTimer: document.getElementById('power-timer') as HTMLElement,
+  powerTimerContainer: document.getElementById('power-timer-container') as HTMLElement,
 };
 
 // --- Theme colors ---
@@ -208,6 +241,8 @@ function switchCity(lat: number, lon: number) {
   pacProgress = 0;
   lastFrameTime = 0;
   ghosts.length = 0;
+  rockets.length = 0;
+  fireParticles.length = 0;
   streetEdges = [];
   pacLatLng = null;
   HUD.gameOverScreen.classList.add('hidden');
@@ -364,6 +399,8 @@ function resetGameParams() {
   HUD.gameOverScreen.classList.add('hidden');
 
   ghosts.length = 0;
+  rockets.length = 0;
+  fireParticles.length = 0;
 
   const nearestNode = engine.findBestSpawnNode(userPos[0], userPos[1]);
   engine.setInitialPacmanPosition(nearestNode);
@@ -553,6 +590,182 @@ function drawDots() {
   ctx.restore();
 }
 
+function drawPowerItems() {
+  const items = engine.getPowerItems();
+  const radius = 16;
+  
+  ctx.save();
+  for (const item of items) {
+    const p = toPoint(item.lat, item.lon);
+    
+    // Circle base
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+    ctx.fillStyle = '#1a1a1a';
+    ctx.strokeStyle = '#00ffcc';
+    ctx.lineWidth = 2;
+    ctx.fill();
+    ctx.stroke();
+
+    // Icon </>
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#00ffcc';
+    ctx.fillText('</>', p.x, p.y);
+    
+    // Pulse glow
+    const pulse = Math.sin(performance.now() / 200) * 5 + 5;
+    ctx.shadowColor = '#00ffcc';
+    ctx.shadowBlur = pulse;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawSparks() {
+  ctx.save();
+  for (let i = sparks.length - 1; i >= 0; i--) {
+    const s = sparks[i];
+    s.x += s.vx;
+    s.y += s.vy;
+    s.life -= 0.02;
+    if (s.life <= 0) {
+      sparks.splice(i, 1);
+      continue;
+    }
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, 2 * s.life, 0, Math.PI * 2);
+    ctx.fillStyle = s.color;
+    ctx.globalAlpha = s.life;
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function createSparks(x: number, y: number, color1: string, color2: string) {
+  for (let i = 0; i < 5; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 1 + Math.random() * 3;
+    sparks.push({
+      x, y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 1.0,
+      color: Math.random() > 0.5 ? color1 : color2
+    });
+  }
+}
+
+function drawRocketItems() {
+  const items = engine.getRocketItems();
+  const radius = 16;
+  
+  ctx.save();
+  for (const item of items) {
+    const p = toPoint(item.lat, item.lon);
+    
+    // Circle base
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+    ctx.fillStyle = '#1a1a1a';
+    ctx.strokeStyle = '#ff3300';
+    ctx.lineWidth = 2;
+    ctx.fill();
+    ctx.stroke();
+
+    // Rocket Icon
+    ctx.font = '18px serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('🚀', p.x, p.y);
+    
+    // Pulse glow
+    const pulse = Math.sin(performance.now() / 200) * 5 + 5;
+    ctx.shadowColor = '#ff3300';
+    ctx.shadowBlur = pulse;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawRockets() {
+  rockets.forEach((rocket) => {
+    const p = toPoint(rocket.lat, rocket.lon);
+    
+    // Fire trail
+    if (Math.random() > 0.3) {
+      fireParticles.push({
+        x: p.x, y: p.y,
+        vx: (Math.random() - 0.5) * 2,
+        vy: (Math.random() - 0.5) * 2,
+        life: 1.0
+      });
+    }
+
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    
+    // Find direction for rotation
+    const cNode = engine.getNodes().get(rocket.currentNodeId);
+    const tNode = engine.getNodes().get(rocket.targetNodeId);
+    if (cNode && tNode) {
+      const p1 = map.project([cNode.lat, cNode.lon], map.getMaxZoom());
+      const p2 = map.project([tNode.lat, tNode.lon], map.getMaxZoom());
+      const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+      ctx.rotate(angle);
+    }
+
+    // Torpedo Body - Black with yellow border
+    ctx.beginPath();
+    ctx.moveTo(-22, -11); // Back top
+    ctx.lineTo(-22, 11);  // Flat back
+    ctx.quadraticCurveTo(8, 14, 32, 0); // Pointy front (head)
+    ctx.quadraticCurveTo(8, -14, -22, -11); 
+    ctx.closePath();
+    
+    ctx.fillStyle = 'black';
+    ctx.shadowColor = '#ffd22f'; // Yellow glow matching border
+    ctx.shadowBlur = 15;
+    ctx.fill();
+    
+    ctx.strokeStyle = '#ffd22f'; // Pacman yellow
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+
+    // Gloss effect (simple highlight on top)
+    ctx.beginPath();
+    ctx.ellipse(-4, -5, 15, 4, -0.1, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.fill();
+    
+    ctx.shadowBlur = 0;
+    
+    ctx.restore();
+  });
+}
+
+function drawFireTrail() {
+  ctx.save();
+  for (let i = fireParticles.length - 1; i >= 0; i--) {
+    const f = fireParticles[i];
+    f.x += f.vx;
+    f.y += f.vy;
+    f.life -= 0.03;
+    if (f.life <= 0) {
+      fireParticles.splice(i, 1);
+      continue;
+    }
+    
+    const size = 3 + f.life * 8;
+    ctx.fillStyle = `rgba(255, ${Math.floor(50 + 150 * f.life)}, 0, ${f.life})`;
+    ctx.beginPath();
+    ctx.arc(f.x, f.y, size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
 function drawPacman() {
   if (!pacLatLng) return;
 
@@ -563,9 +776,33 @@ function drawPacman() {
     if (!respawnBlinkOn) return;
   }
 
+  const state = engine.getState();
   const p = toPoint(pacLatLng.lat, pacLatLng.lng);
   const radius = 22;
   const rot = (currentRotation * Math.PI) / 180;
+
+  // Power-up flashing effect
+  let primaryColor = '#ffd22f'; // default yellow
+  let secondaryColor = '#141c28';
+  let eyeColor = '#ffd22f';
+  let glowColor = 'rgba(255, 210, 47, 0.3)';
+
+  if (state.powerUpActive) {
+    primaryColor = '#ff00ff'; // Konstantes Neon-Pink für die Kontur
+    
+    // Smooth transition between yellow (#ffff00) and black (#000000)
+    const t = (Math.sin(performance.now() / 120) + 1) / 2; 
+    const colorVal = Math.floor(t * 255);
+    secondaryColor = `rgb(${colorVal}, ${colorVal}, 0)`;
+
+    glowColor = 'rgba(0, 255, 255, 0.8)'; // Konstantes Neon-Cyan für den Glow
+    eyeColor = '#ffffff';
+    
+    // Create sparks around pacman
+    if (Math.random() > 0.5) {
+      createSparks(p.x, p.y, '#ff00ff', '#00ffff');
+    }
+  }
 
   // Animate mouth
   if (activeKey) {
@@ -580,7 +817,7 @@ function drawPacman() {
     mouthAngle += (0.15 - mouthAngle) * 0.1;
   }
 
-  // Teeth geometry
+// Teeth geometry
   const teethCount = 7;
   const teethStart = -radius + 2;
   const teethEnd = radius - 2;
@@ -598,16 +835,16 @@ function drawPacman() {
   ctx.moveTo(0, 0);
   ctx.arc(0, 0, radius, -Math.PI, 0);
   ctx.closePath();
-  ctx.fillStyle = '#141c28';
+  ctx.fillStyle = secondaryColor;
   ctx.fill();
-  ctx.strokeStyle = '#ffd22f';
+  ctx.strokeStyle = primaryColor;
   ctx.lineWidth = 2.5;
   ctx.stroke();
 
   // Hood accent
   ctx.beginPath();
   ctx.arc(0, 0, radius - 4, -2.6, -0.5);
-  ctx.strokeStyle = '#ffdd66';
+  ctx.strokeStyle = primaryColor;
   ctx.lineWidth = 1.5;
   ctx.globalAlpha = 0.75;
   ctx.stroke();
@@ -636,9 +873,9 @@ function drawPacman() {
   ctx.moveTo(0, 0);
   ctx.arc(0, 0, radius, 0, Math.PI);
   ctx.closePath();
-  ctx.fillStyle = '#141c28';
+  ctx.fillStyle = secondaryColor;
   ctx.fill();
-  ctx.strokeStyle = '#ffd22f';
+  ctx.strokeStyle = primaryColor;
   ctx.lineWidth = 2.5;
   ctx.stroke();
 
@@ -658,11 +895,11 @@ function drawPacman() {
   ctx.restore();
 
   // Subtle glow
-  ctx.shadowColor = 'rgba(255, 210, 47, 0.3)';
-  ctx.shadowBlur = 8;
+  ctx.shadowColor = glowColor;
+  ctx.shadowBlur = state.powerUpActive ? 15 : 8;
   ctx.beginPath();
   ctx.arc(0, 0, radius, 0, Math.PI * 2);
-  ctx.strokeStyle = 'rgba(255, 210, 47, 0.15)';
+  ctx.strokeStyle = state.powerUpActive ? primaryColor : 'rgba(255, 210, 47, 0.15)';
   ctx.lineWidth = 1;
   ctx.stroke();
   ctx.shadowBlur = 0;
@@ -671,10 +908,10 @@ function drawPacman() {
   // Draw in screen space — fixed position above head center
   ctx.save();
   ctx.rotate(-rot); // undo body rotation to get screen-aligned coords
-  ctx.strokeStyle = '#ffd22f';
+  ctx.strokeStyle = eyeColor;
   ctx.lineWidth = 2.5;
   ctx.lineCap = 'round';
-  ctx.shadowColor = 'rgba(255, 210, 47, 0.85)';
+  ctx.shadowColor = eyeColor;
   ctx.shadowBlur = 4;
   const eyeScreenX = 3;
   const eyeScreenY = -10;
@@ -725,7 +962,17 @@ function drawBotEyes(eyeX1: number, eyeX2: number, eyeY: number, r: number, blin
 function drawGhosts() {
   for (const ghost of ghosts) {
     const p = toPoint(ghost.lat, ghost.lon);
-    const color = ghost.color;
+    const state = engine.getState();
+    let color = ghost.color;
+    
+    if (state.powerUpActive) {
+      const remaining = state.powerUpEndTime - performance.now();
+      if (remaining < 3000 && Math.floor(performance.now() / 200) % 2 === 0) {
+        color = '#ffffff'; // flashing white
+      } else {
+        color = '#0000ff'; // scared blue
+      }
+    }
 
     ctx.save();
     ctx.translate(p.x, p.y);
@@ -748,7 +995,7 @@ function drawGhosts() {
       ctx.lineTo(-12, 16); ctx.quadraticCurveTo(-18, 16, -18, 10);
       ctx.closePath(); ctx.fillStyle = color; ctx.fill();
       ctx.shadowBlur = 0;
-      drawBotEyes(-7, 7, 2, 6, ghost.isBlinking);
+      drawBotEyes(-7, 7, 2, 6, engine.getState().powerUpActive ? false : ghost.isBlinking);
 
     } else if (ghost.shape === 1) {
       // --- Square bot: antenna + boxy head + side ears ---
@@ -759,7 +1006,7 @@ function drawGhosts() {
       for (const s of [-1, 1]) { ctx.beginPath(); ctx.roundRect(s * 16, -6, 5, 12, 2); ctx.fillStyle = color; ctx.fill(); }
       ctx.beginPath(); ctx.roundRect(-16, -18, 32, 34, 6); ctx.fillStyle = color; ctx.fill();
       ctx.shadowBlur = 0;
-      drawBotEyes(-6, 6, -2, 5, ghost.isBlinking);
+      drawBotEyes(-6, 6, -2, 5, engine.getState().powerUpActive ? false : ghost.isBlinking);
 
     } else if (ghost.shape === 2) {
       // --- Round bot: V-antenna + circle head + ear bumps ---
@@ -771,7 +1018,7 @@ function drawGhosts() {
       ctx.beginPath(); ctx.arc(0, 0, 18, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill();
       for (const s of [-1, 1]) { ctx.beginPath(); ctx.arc(s * 18, 0, 4, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill(); }
       ctx.shadowBlur = 0;
-      drawBotEyes(-7, 7, -2, 6, ghost.isBlinking);
+      drawBotEyes(-7, 7, -2, 6, engine.getState().powerUpActive ? false : ghost.isBlinking);
 
     } else {
       // --- TV bot: rabbit-ear antenna + wide rectangle head ---
@@ -782,19 +1029,71 @@ function drawGhosts() {
       }
       ctx.beginPath(); ctx.roundRect(-18, -16, 36, 28, 5); ctx.fillStyle = color; ctx.fill();
       ctx.shadowBlur = 0;
-      drawBotEyes(-6, 6, -4, 5, ghost.isBlinking);
+      drawBotEyes(-6, 6, -4, 5, engine.getState().powerUpActive ? false : ghost.isBlinking);
     }
 
     ctx.restore();
   }
 }
 
+function drawVignette() {
+  const state = engine.getState();
+  if (!state.powerUpActive) return;
+
+  const w = canvas.width;
+  const h = canvas.height;
+  const vSizeW = w * 0.10; // 10% of width
+  const vSizeH = h * 0.10; // 10% of height
+
+  ctx.save();
+  
+  // Top
+  const gradTop = ctx.createLinearGradient(0, 0, 0, vSizeH);
+  gradTop.addColorStop(0, 'rgba(0, 0, 0, 0.85)');
+  gradTop.addColorStop(0.6, 'rgba(0, 0, 0, 0.3)');
+  gradTop.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = gradTop;
+  ctx.fillRect(0, 0, w, vSizeH);
+
+  // Bottom
+  const gradBot = ctx.createLinearGradient(0, h - vSizeH, 0, h);
+  gradBot.addColorStop(0, 'rgba(0, 0, 0, 0)');
+  gradBot.addColorStop(0.4, 'rgba(0, 0, 0, 0.3)');
+  gradBot.addColorStop(1, 'rgba(0, 0, 0, 0.85)');
+  ctx.fillStyle = gradBot;
+  ctx.fillRect(0, h - vSizeH, w, vSizeH);
+
+  // Left
+  const gradLeft = ctx.createLinearGradient(0, 0, vSizeW, 0);
+  gradLeft.addColorStop(0, 'rgba(0, 0, 0, 0.85)');
+  gradLeft.addColorStop(0.6, 'rgba(0, 0, 0, 0.3)');
+  gradLeft.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = gradLeft;
+  ctx.fillRect(0, 0, vSizeW, h);
+
+  // Right
+  const gradRight = ctx.createLinearGradient(w - vSizeW, 0, w, 0);
+  gradRight.addColorStop(0, 'rgba(0, 0, 0, 0)');
+  gradRight.addColorStop(0.4, 'rgba(0, 0, 0, 0.3)');
+  gradRight.addColorStop(1, 'rgba(0, 0, 0, 0.85)');
+  ctx.fillStyle = gradRight;
+  ctx.fillRect(w - vSizeW, 0, vSizeW, h);
+
+  ctx.restore();
+}
+
 function drawFrame() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawStreets();
   drawDots();
+  drawPowerItems();
+  drawRocketItems();
+  drawFireTrail();
+  drawRockets();
   drawGhosts();
   drawPacman();
+  drawSparks();
+  drawVignette();
 }
 
 // =============================================
@@ -811,6 +1110,18 @@ function gameLoop(time: number) {
   if (!lastFrameTime) { lastFrameTime = time; return; }
   const dt = time - lastFrameTime;
   lastFrameTime = time;
+  const now = performance.now();
+  engine.updatePowerUp(now);
+  
+  const state = engine.getState();
+  if (state.powerUpActive) {
+    HUD.powerTimerContainer.classList.remove('hidden');
+    const remaining = Math.max(0, Math.ceil((state.powerUpEndTime - now) / 1000));
+    HUD.powerTimer.innerText = `${remaining}s`;
+    HUD.powerTimer.style.color = (state.powerUpEndTime - now < 3000 && Math.floor(now / 200) % 2 === 0) ? '#ffffff' : '#ff00ff';
+  } else {
+    HUD.powerTimerContainer.classList.add('hidden');
+  }
 
   if (!pacCurrentNodeId) {
     const node = engine.getPacmanNode();
@@ -950,7 +1261,89 @@ function gameLoop(time: number) {
      ghost.lon = ghostLatLng.lng;
   });
 
-  // 4. Collision detection
+  // 4. Rocket movement
+  for (let i = rockets.length - 1; i >= 0; i--) {
+    const rocket = rockets[i];
+    rocket.lifeTime -= dt;
+    if (rocket.lifeTime <= 0) {
+      createSparks(toPoint(rocket.lat, rocket.lon).x, toPoint(rocket.lat, rocket.lon).y, '#ff3300', '#ffff00');
+      rockets.splice(i, 1);
+      continue;
+    }
+
+    const cNode = engine.getNodes().get(rocket.currentNodeId);
+    const tNode = engine.getNodes().get(rocket.targetNodeId);
+    if (!cNode || !tNode) { rockets.splice(i, 1); continue; }
+
+    const dist = map.distance([cNode.lat, cNode.lon], [tNode.lat, tNode.lon]);
+    const durationMs = dist > 0 ? (dist / rocket.speed) * 1000 : 200;
+    rocket.progress += dt / durationMs;
+
+    while (rocket.progress >= 1) {
+      rocket.progress -= 1;
+      const prev = rocket.currentNodeId;
+      rocket.currentNodeId = rocket.targetNodeId;
+      rocket.prevNodeId = prev;
+
+      const node = engine.getNodes().get(rocket.currentNodeId);
+      if (!node || node.neighbors.length === 0) {
+        createSparks(toPoint(rocket.lat, rocket.lon).x, toPoint(rocket.lat, rocket.lon).y, '#ff3300', '#ffff00');
+        rockets.splice(i, 1);
+        break;
+      }
+
+      // Tracking logic
+      let targetGhost: GhostState | null = null;
+      let minGhostDist = Infinity;
+      ghosts.forEach(g => {
+        const d = (g.lat - node.lat)**2 + (g.lon - node.lon)**2;
+        if (d < minGhostDist) {
+          minGhostDist = d;
+          targetGhost = g;
+        }
+      });
+
+      let nextNodeId = "";
+      if (targetGhost) {
+        let bestDist = Infinity;
+        node.neighbors.forEach(nbId => {
+          if (nbId === rocket.prevNodeId && node.neighbors.length > 1) return;
+          const nb = engine.getNodes().get(nbId)!;
+          const d = (nb.lat - targetGhost!.lat)**2 + (nb.lon - targetGhost!.lon)**2;
+          if (d < bestDist) {
+            bestDist = d;
+            nextNodeId = nbId;
+          }
+        });
+      } else {
+        const valid = node.neighbors.filter(n => n !== rocket.prevNodeId);
+        nextNodeId = valid.length > 0 ? valid[Math.floor(Math.random() * valid.length)] : node.neighbors[0];
+      }
+      
+      if (!nextNodeId) {
+         createSparks(toPoint(rocket.lat, rocket.lon).x, toPoint(rocket.lat, rocket.lon).y, '#ff3300', '#ffff00');
+         rockets.splice(i, 1);
+         break;
+      }
+      rocket.targetNodeId = nextNodeId;
+    }
+
+    if (rockets[i]) {
+       const rcNode = engine.getNodes().get(rocket.currentNodeId);
+       const rtNode = engine.getNodes().get(rocket.targetNodeId);
+       if (rcNode && rtNode) {
+         const rp1 = map.project([rcNode.lat, rcNode.lon], map.getMaxZoom());
+         const rp2 = map.project([rtNode.lat, rtNode.lon], map.getMaxZoom());
+         const rpxX = rp1.x + (rp2.x - rp1.x) * Math.min(Math.max(rocket.progress, 0), 1);
+         const rpxY = rp1.y + (rp2.y - rp1.y) * Math.min(Math.max(rocket.progress, 0), 1);
+         const rocketLatLng = map.unproject([rpxX, rpxY], map.getMaxZoom());
+         rocket.lat = rocketLatLng.lat;
+         rocket.lon = rocketLatLng.lng;
+       }
+    }
+  }
+
+  // 5. Collision detection
   if (isRespawning || isGameOver || !pacLatLng) return;
 
   const pxPac = toPoint(pacLatLng.lat, pacLatLng.lng);
@@ -961,15 +1354,48 @@ function gameLoop(time: number) {
      if (collisionThisFrame) return;
      const pxGhost = toPoint(ghost.lat, ghost.lon);
      const distSq = (pxPac.x - pxGhost.x) ** 2 + (pxPac.y - pxGhost.y) ** 2;
-     if (distSq < COLLISION_SQ) {
-        collisionThisFrame = true;
-        if (engine.loseLife()) {
-           showGameOver();
-        } else {
-           triggerRespawn();
-        }
-     }
+    if (distSq < COLLISION_SQ) {
+       collisionThisFrame = true;
+       if (engine.getState().powerUpActive) {
+         engine.eatGhost();
+         updateHUD();
+         
+         // Create explosion sparks
+         for(let i=0; i<3; i++) createSparks(pxGhost.x, pxGhost.y, '#ff00ff', '#00ffff');
+
+         // Remove ghost instead of respawning
+         const idx = ghosts.indexOf(ghost);
+         if (idx > -1) ghosts.splice(idx, 1);
+         
+         collisionThisFrame = false; // allow eating multiple ghosts
+       } else {
+         if (engine.loseLife()) {
+            showGameOver();
+         } else {
+            triggerRespawn();
+         }
+       }
+    }
   });
+
+  // Rocket vs Ghost
+  for (let rIdx = rockets.length - 1; rIdx >= 0; rIdx--) {
+    const rocket = rockets[rIdx];
+    const pxRocket = toPoint(rocket.lat, rocket.lon);
+    for (let gIdx = ghosts.length - 1; gIdx >= 0; gIdx--) {
+      const ghost = ghosts[gIdx];
+      const pxGhost = toPoint(ghost.lat, ghost.lon);
+      const dSq = (pxRocket.x - pxGhost.x)**2 + (pxRocket.y - pxGhost.y)**2;
+      if (dSq < 40 * 40) {
+        for(let i=0; i<8; i++) createSparks(pxGhost.x, pxGhost.y, '#ff3300', '#ffff00');
+        ghosts.splice(gIdx, 1);
+        rockets.splice(rIdx, 1);
+        engine.eatGhost();
+        updateHUD();
+        break;
+      }
+    }
+  }
 }
 
 function setupInput() {
@@ -1201,6 +1627,23 @@ function setupInput() {
 
   requestAnimationFrame(gameLoop);
 }
+
+// Event system for rocket launch
+(window as any).dispatchGameEvent = (name: string) => {
+  if (name === 'launch-rocket') {
+    if (!pacCurrentNodeId || !pacTargetNodeId) return;
+    rockets.push({
+      currentNodeId: pacCurrentNodeId,
+      targetNodeId: pacTargetNodeId,
+      prevNodeId: null,
+      progress: pacProgress,
+      lat: pacLatLng!.lat,
+      lon: pacLatLng!.lng,
+      lifeTime: 10000,
+      speed: 90 // slightly faster than pacman (80)
+    });
+  }
+};
 
 // Initialize
 setupStartScreen();
