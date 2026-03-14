@@ -554,6 +554,7 @@ function drawDots() {
   ctx.textBaseline = 'middle';
 
   for (const dot of dots) {
+    if (!dot) continue;
     const p = toPoint(dot.lat, dot.lon);
     const px = Math.round(p.x);
     const py = Math.round(p.y);
@@ -596,6 +597,7 @@ function drawPowerItems() {
   
   ctx.save();
   for (const item of items) {
+    if (!item) continue;
     const p = toPoint(item.lat, item.lon);
     
     // Circle base
@@ -663,6 +665,7 @@ function drawRocketItems() {
   
   ctx.save();
   for (const item of items) {
+    if (!item) continue;
     const p = toPoint(item.lat, item.lon);
     
     // Circle base
@@ -1083,6 +1086,7 @@ function drawVignette() {
 }
 
 function drawFrame() {
+  if (engine.getNodes().size === 0) return;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawStreets();
   drawDots();

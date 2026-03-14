@@ -280,6 +280,10 @@ body {
   color: #000;
 }
 
+.theme-street .select-wrapper::after {
+  color: #000;
+}
+
 .select-wrapper {
   position: relative;
 }
@@ -288,6 +292,11 @@ body {
   appearance: none;
   padding-right: 32px;
   min-width: 100px;
+}
+
+.hud-select option {
+  background: #1a1a1a;
+  color: white;
 }
 
 .select-wrapper::after {

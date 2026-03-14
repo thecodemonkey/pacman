@@ -29,6 +29,8 @@ export class GameEngine {
   public buildGraph(osmData: any) {
     this.nodes.clear();
     this.dots.clear();
+    this.powerItems.clear();
+    this.rocketItems.clear();
 
     // 1. Collect all nodes from the ways we care about
     const wayElements = osmData.elements.filter((e: any) => e.type === 'way');
@@ -269,15 +271,21 @@ export class GameEngine {
   }
 
   public getDots() {
-    return Array.from(this.dots).map(id => this.nodes.get(id)!);
+    return Array.from(this.dots)
+      .map(id => this.nodes.get(id))
+      .filter((n): n is GameNode => !!n);
   }
 
   public getPowerItems() {
-    return Array.from(this.powerItems).map(id => this.nodes.get(id)!);
+    return Array.from(this.powerItems)
+      .map(id => this.nodes.get(id))
+      .filter((n): n is GameNode => !!n);
   }
 
   public getRocketItems() {
-    return Array.from(this.rocketItems).map(id => this.nodes.get(id)!);
+    return Array.from(this.rocketItems)
+      .map(id => this.nodes.get(id))
+      .filter((n): n is GameNode => !!n);
   }
   
   public getPacmanNode() {
