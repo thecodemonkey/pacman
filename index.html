@@ -4,21 +4,21 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <title>OSM Tech-Man</title>
+    <title>OSM Vibe-Man</title>
 
-    <meta name="description" content="Tech-Man – A real-world Pac-Man game on OpenStreetMap. Play on actual city streets using GPS or choose from cities like Paris, Tokyo, Berlin and more." />
+    <meta name="description" content="Vibe-Man – A real-world Pac-Man game on OpenStreetMap. Play on actual city streets using GPS or choose from cities like Paris, Tokyo, Berlin and more." />
 
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="Tech-Man – Play on Real City Streets" />
+    <meta property="og:title" content="Vibe-Man – Play on Real City Streets" />
     <meta property="og:description" content="A real-world Pac-Man game on OpenStreetMap. Choose a city and play on actual streets." />
-    <meta property="og:image" content="https://techman.thecodemonkey.de/tech-man-banner.png" />
+    <meta property="og:image" content="https://techman.thecodemonkey.de/vibe-man.png" />
 
     <!-- Twitter -->
     <meta property="twitter:card" content="summary_large_image" />
-    <meta property="twitter:title" content="Tech-Man – Play on Real City Streets" />
+    <meta property="twitter:title" content="Vibe-Man – Play on Real City Streets" />
     <meta property="twitter:description" content="A real-world Pac-Man game on OpenStreetMap. Choose a city and play on actual streets." />
-    <meta property="twitter:image" content="https://techman.thecodemonkey.de/tech-man-banner.png" />
+    <meta property="twitter:image" content="https://techman.thecodemonkey.de/vibe-man.png" />
 
     <meta name="theme-color" content="#0c0c0c" />
   </head>
@@ -27,33 +27,45 @@
       <div id="map" tabindex="0" autofocus></div>
       <canvas id="game-canvas"></canvas>
       <div id="hud" class="glass">
-        <div class="hud-item">
-          <span class="label">SCORE</span>
-          <span id="score" class="value">0000</span>
+        <!-- Left Section: Stats -->
+        <div class="hud-group stats-group">
+          <div class="hud-item">
+            <span class="label">SCORE</span>
+            <span id="score" class="value">0000</span>
+          </div>
+          <div class="hud-divider"></div>
+          <div class="hud-item hearts-item">
+            <span class="label">LIVES</span>
+            <div id="lives" class="value">❤❤❤</div>
+          </div>
         </div>
-        <div class="hud-item">
-          <span class="label">LIVES</span>
-          <div id="lives" class="value">❤❤❤</div>
-        </div>
-        <div id="power-timer-container" class="hud-item hidden">
+
+        <!-- Middle Section: Power-Up -->
+        <div id="power-timer-container" class="hud-item power-group hidden">
           <span class="label">POWER-UP</span>
-          <span id="power-timer" class="value" style="color: #ff00ff">20s</span>
+          <span id="power-timer" class="value">20s</span>
         </div>
-        <button id="view-toggle" class="glass-btn" onclick="this.blur()">Satellite View</button>
-        <select id="hud-city-select" class="glass-btn hud-select">
-          <option value="">GPS</option>
-          <option value="48.8566,2.3522">Paris</option>
-          <option value="40.7128,-74.006">New York</option>
-          <option value="51.5074,-0.1278">London</option>
-          <option value="-22.9068,-43.1729">Rio</option>
-          <option value="-33.8688,151.2093">Sydney</option>
-          <option value="35.6762,139.6503">Tokyo</option>
-          <option value="41.9028,12.4964">Rome</option>
-          <option value="52.52,13.405">Berlin</option>
-          <option value="37.5665,126.978">Seoul</option>
-          <option value="19.4326,-99.1332">Mexico City</option>
-          <option value="1.3521,103.8198">Singapore</option>
-        </select>
+
+        <!-- Right Section: Actions -->
+        <div class="hud-group actions-group">
+          <button id="view-toggle" class="glass-btn action-btn" onclick="this.blur()">Satellite View</button>
+          <div class="select-wrapper">
+            <select id="hud-city-select" class="glass-btn hud-select">
+              <option value="">GPS</option>
+              <option value="48.8566,2.3522">Paris</option>
+              <option value="40.7128,-74.006">New York</option>
+              <option value="51.5074,-0.1278">London</option>
+              <option value="-22.9068,-43.1729">Rio</option>
+              <option value="-33.8688,151.2093">Sydney</option>
+              <option value="35.6762,139.6503">Tokyo</option>
+              <option value="41.9028,12.4964">Rome</option>
+              <option value="52.52,13.405">Berlin</option>
+              <option value="37.5665,126.978">Seoul</option>
+              <option value="19.4326,-99.1332">Mexico City</option>
+              <option value="1.3521,103.8198">Singapore</option>
+            </select>
+          </div>
+        </div>
       </div>
 
       <!-- Joystick -->
@@ -70,7 +82,7 @@
 
     <div id="start-screen">
       <div class="start-modal">
-        <h1 class="start-title">TECH-MAN</h1>
+        <h1 class="start-title">VIBE-MAN</h1>
         <p class="start-subtitle">Choose your location</p>
         <div class="start-options">
           <label class="start-radio selected">

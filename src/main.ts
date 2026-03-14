@@ -155,7 +155,7 @@ function initMap(lat: number, lon: number) {
   streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
   satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}');
 
-  document.getElementById('map')?.classList.add('theme-street');
+  document.getElementById('app')?.classList.add('theme-street');
 
   // Setup canvas overlay
   canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
@@ -256,28 +256,28 @@ function switchCity(lat: number, lon: number) {
 // --- View Toggle ---
 HUD.viewToggle.innerText = 'Street View';
 HUD.viewToggle.addEventListener('click', () => {
-  const mapEl = document.getElementById('map');
-  if (!mapEl) return;
+  const appEl = document.getElementById('app');
+  if (!appEl) return;
 
   if (currentTheme === 'pacman') {
     currentTheme = 'satellite';
     HUD.viewToggle.innerText = 'Satellite View';
-    mapEl.classList.remove('theme-pacman');
-    mapEl.classList.add('theme-satellite');
+    appEl.classList.remove('theme-pacman');
+    appEl.classList.add('theme-satellite');
     map.removeLayer(streetLayer);
     satelliteLayer.addTo(map);
   } else if (currentTheme === 'satellite') {
     currentTheme = 'street';
     HUD.viewToggle.innerText = 'Street View';
-    mapEl.classList.remove('theme-satellite');
-    mapEl.classList.add('theme-street');
+    appEl.classList.remove('theme-satellite');
+    appEl.classList.add('theme-street');
     map.removeLayer(satelliteLayer);
     streetLayer.addTo(map);
   } else {
     currentTheme = 'pacman';
-    HUD.viewToggle.innerText = 'Tech-Man View';
-    mapEl.classList.remove('theme-street');
-    mapEl.classList.add('theme-pacman');
+    HUD.viewToggle.innerText = 'Vibe-Man View';
+    appEl.classList.remove('theme-street');
+    appEl.classList.add('theme-pacman');
     if (!map.hasLayer(streetLayer)) {
       map.removeLayer(satelliteLayer);
       streetLayer.addTo(map);
