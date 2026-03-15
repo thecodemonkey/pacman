@@ -56,6 +56,7 @@ export class Renderer3D implements IRenderer {
   // Interaction state
   private isPointerDown = false;
   private lastPointerPos = { x: 0, y: 0 };
+  private sidewalkHeight = 0.8;
 
   constructor(engine: GameEngine) {
     this.engine = engine;
@@ -95,7 +96,9 @@ export class Renderer3D implements IRenderer {
     const h = container.clientHeight;
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color('#0a0a0a'); // Dark vibe background
+    // Indigo Sunset Atmosphere
+    this.scene.background = new THREE.Color('#1a1b4b'); // Deep Indigo fallback
+    this.scene.fog = new THREE.Fog(0xff8040, 500, 4000); // Warm orange fog for sunset horizon
 
     this.camera = new THREE.PerspectiveCamera(45, w / h, 1, 10000);
     // Position for a tilted "isometric-like" perspective
@@ -107,37 +110,97 @@ export class Renderer3D implements IRenderer {
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    (this.renderer as any).outputColorSpace = THREE.SRGBColorSpace; // Better color accuracy
 
     // Canvas styling to overlay Leaflet map
     this.renderer.domElement.style.position = 'absolute';
     this.renderer.domElement.style.top = '0';
     this.renderer.domElement.style.left = '0';
-    this.renderer.domElement.style.zIndex = '600'; // above leaflet (500) but below HUD (2000) and joystick (2000)
-    this.renderer.domElement.style.pointerEvents = 'none'; // let input pass through to joystick
+    this.renderer.domElement.style.zIndex = '600'; 
+    this.renderer.domElement.style.pointerEvents = 'none'; 
     container.appendChild(this.renderer.domElement);
 
-    // Lighting config
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    // Lighting config - Balanced Sunset Hues (Lighter atmosphere)
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7); // Neutral brighter ambient
     this.scene.add(ambientLight);
 
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
-    dirLight.position.set(200, 500, 300);
+    const dirLight = new THREE.DirectionalLight(0xfff0dd, 0.8); // Softer warm white light
+    dirLight.position.set(500, 400, -800);
     dirLight.castShadow = true;
     dirLight.shadow.mapSize.width = 2048;
     dirLight.shadow.mapSize.height = 2048;
     dirLight.shadow.camera.near = 0.5;
-    dirLight.shadow.camera.far = 2500;
-    // larger orthographic frustum for shadows
-    const ext = 1000;
+    dirLight.shadow.camera.far = 4000;
+    dirLight.shadow.bias = -0.0005; // Help with shadow acne on tiles
+    const ext = 2000;
     dirLight.shadow.camera.left = -ext;
     dirLight.shadow.camera.right = ext;
     dirLight.shadow.camera.top = ext;
     dirLight.shadow.camera.bottom = -ext;
     this.scene.add(dirLight);
 
-    // Neon grid for aesthetic
-    const grid = new THREE.GridHelper(4000, 100, 0x00ffcc, 0x222222);
-    grid.position.y = -0.1;
+    // Gradient Sky Background (Large Sphere)
+    const skyGeo = new THREE.SphereGeometry(4500, 32, 32);
+    // Custom shader-like gradient for Sunset (Indigo -> Pink -> Orange)
+    const vertexShader = `
+      varying vec3 vWorldPosition;
+      void main() {
+        vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+        vWorldPosition = worldPosition.xyz;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `;
+    const fragmentShader = `
+      varying vec3 vWorldPosition;
+      void main() {
+        float h = normalize(vWorldPosition).y;
+        vec3 indigo = vec3(0.02, 0.0, 0.08); // Even darker, near-black violet top
+        vec3 pink = vec3(0.95, 0.0, 0.4);    // Vibrant Magenta/Pink
+        vec3 orange = vec3(1.0, 0.4, 0.0);   // Deep Sunset Orange
+        
+        vec3 color = mix(orange, pink, smoothstep(-0.2, 0.4, h));
+        color = mix(color, indigo, smoothstep(0.4, 0.8, h));
+        gl_FragColor = vec4(color, 1.0);
+      }
+    `;
+    const skyMat = new THREE.ShaderMaterial({
+      vertexShader,
+      fragmentShader,
+      side: THREE.BackSide
+    });
+    const sky = new THREE.Mesh(skyGeo, skyMat);
+    this.scene.add(sky);
+
+    // Crescent Moon (from the image)
+    const moonShape = new THREE.Shape();
+    moonShape.absarc(0, 0, 10, 0, Math.PI * 2, false);
+    const holePath = new THREE.Path();
+    holePath.absarc(4, 4, 10, 0, Math.PI * 2, false);
+    moonShape.holes.push(holePath);
+
+    const moonGeo = new THREE.ShapeGeometry(moonShape);
+    const moonMat = new THREE.MeshBasicMaterial({ color: 0xffffcc, side: THREE.DoubleSide });
+    const moon = new THREE.Mesh(moonGeo, moonMat);
+    moon.position.set(-1000, 2000, -3000); // High in the sky
+    moon.scale.set(10, 10, 10);
+    moon.rotation.z = Math.PI / 4;
+    moon.lookAt(0, 800, 800); // Orient towards camera
+    this.scene.add(moon);
+
+    // Ground plane (Large green area)
+    const groundGeo = new THREE.PlaneGeometry(10000, 10000);
+    const groundMat = new THREE.MeshStandardMaterial({ color: 0x2d4c1e, roughness: 0.9 }); // Darker green for sunset contrast
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.5;
+    ground.receiveShadow = true;
+    this.scene.add(ground);
+
+    // Subtle grid for orientation
+    const grid = new THREE.GridHelper(5000, 50, 0xffffff, 0xffffff);
+    grid.position.y = -0.4;
+    (grid.material as THREE.LineBasicMaterial).opacity = 0.1;
+    (grid.material as THREE.LineBasicMaterial).transparent = true;
     this.scene.add(grid);
 
     this.scene.add(this.streetsGroup);
@@ -171,12 +234,16 @@ export class Renderer3D implements IRenderer {
     upperGroup.name = 'upperMouth';
     const upperGeo = new THREE.SphereGeometry(12, 32, 32, 0, Math.PI * 2, 0, Math.PI / 2);
     const upperMesh = new THREE.Mesh(upperGeo, jawMat);
+    upperMesh.castShadow = true;
+    upperMesh.receiveShadow = true;
     upperGroup.add(upperMesh);
 
     // Hood accent (smaller semi-sphere inside)
     const hoodGeo = new THREE.SphereGeometry(11, 32, 32, 0, Math.PI * 2, 0, Math.PI / 2);
     const hoodMesh = new THREE.Mesh(hoodGeo, sphereMat);
     hoodMesh.scale.set(0.9, 0.9, 0.9);
+    hoodMesh.castShadow = true;
+    hoodMesh.receiveShadow = true;
     upperGroup.add(hoodMesh);
 
     // Upper Teeth
@@ -188,6 +255,7 @@ export class Renderer3D implements IRenderer {
       const angle = (i / (teethCount - 1)) * Math.PI - Math.PI / 2;
       tooth.position.set(11.5 * Math.cos(angle), -1.5, 11.5 * Math.sin(angle));
       tooth.rotation.x = Math.PI;
+      tooth.castShadow = true;
       upperGroup.add(tooth);
     }
     this.pacMesh.add(upperGroup);
@@ -197,6 +265,8 @@ export class Renderer3D implements IRenderer {
     lowerGroup.name = 'lowerMouth';
     const lowerGeo = new THREE.SphereGeometry(12, 32, 32, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2);
     const lowerMesh = new THREE.Mesh(lowerGeo, jawMat);
+    lowerMesh.castShadow = true;
+    lowerMesh.receiveShadow = true;
     lowerGroup.add(lowerMesh);
 
     // Lower Teeth
@@ -204,6 +274,7 @@ export class Renderer3D implements IRenderer {
         const tooth = new THREE.Mesh(teethGeo, teethMat);
         const angle = (i / (teethCount - 1)) * Math.PI - Math.PI / 2;
         tooth.position.set(11.5 * Math.cos(angle), 1.5, 11.5 * Math.sin(angle));
+        tooth.castShadow = true;
         lowerGroup.add(tooth);
     }
     this.pacMesh.add(lowerGroup);
@@ -301,33 +372,143 @@ export class Renderer3D implements IRenderer {
       this.baseLon = firstNode.lon;
     }
 
-    // A low-poly representation of streets (dark blue lines or thin boxes)
-    const lineMat = new THREE.LineBasicMaterial({ color: 0x00d2ff, opacity: 0.5, transparent: true });
+    // Colors and Materials (Light Gray theme)
+    const roadColor = 0xcccccc; // Brighter Gray
+    const sidewalkColor = 0xeeeeee; // Clean Off-White
+    const roadMat = new THREE.MeshStandardMaterial({ 
+      color: roadColor, 
+      roughness: 0.6,
+      polygonOffset: true,
+      polygonOffsetFactor: 1,
+      polygonOffsetUnits: 1
+    });
+    const sidewalkMat = new THREE.MeshStandardMaterial({ 
+      color: sidewalkColor, 
+      roughness: 0.8,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1
+    });
+    const markMat = new THREE.MeshBasicMaterial({ 
+      color: 0xffffff,
+      polygonOffset: true,
+      polygonOffsetFactor: -4, // Higher offset to be definitely on top
+      polygonOffsetUnits: -4
+    });
+    
+    const roadWidth = 50; 
+    const sidewalkWidth = 6; // Narrower sidewalks
+    
+    // 1. Visual Simplification: Snap close nodes to a grid for cleaner layout
+    // This reduces "frayed" edges where too many tiny segments meet
+    const visualPositions = new Map<string, THREE.Vector3>();
+    const snapGrid = 40; 
+
     nodes.forEach(node => {
-      const p1 = this.latLonToWorld(node.lat, node.lon);
+        const raw = this.latLonToWorld(node.lat, node.lon);
+        const sx = Math.round(raw.x / snapGrid) * snapGrid;
+        const sz = Math.round(raw.z / snapGrid) * snapGrid;
+        visualPositions.set(node.id, new THREE.Vector3(sx, raw.y, sz));
+    });
+
+    const drawnEdges = new Set<string>();
+
+    nodes.forEach(node => {
+      const p1 = visualPositions.get(node.id)!;
       node.neighbors.forEach(nId => {
         const target = nodes.get(nId);
         if (target) {
-          const p2 = this.latLonToWorld(target.lat, target.lon);
-          const geo = new THREE.BufferGeometry().setFromPoints([p1, p2]);
-          const line = new THREE.Line(geo, lineMat);
-          line.position.y = 1.0;
-          this.streetsGroup.add(line);
+          const edgeId = [node.id, nId].sort().join('-');
+          if (drawnEdges.has(edgeId)) return;
+          drawnEdges.add(edgeId);
+
+          const p2 = visualPositions.get(nId)!;
+          
+          const dx = p2.x - p1.x;
+          const dz = p2.z - p1.z;
+          const dist = Math.sqrt(dx * dx + dz * dz);
+          
+          if (dist < 10) return; // Ignore zero-length or tiny segments after snapping
+
+          const angle = Math.atan2(dz, dx);
+
+          // 1. Road Segment
+          const roadGeo = new THREE.PlaneGeometry(dist, roadWidth);
+          const road = new THREE.Mesh(roadGeo, roadMat);
+          road.rotation.x = -Math.PI / 2;
+          road.rotation.z = -angle; 
+          road.position.set((p1.x + p2.x) / 2, 0.1, (p1.z + p2.z) / 2);
+          road.receiveShadow = true;
+          this.streetsGroup.add(road);
+
+          // 2. Sidewalks
+          const swGeo = new THREE.PlaneGeometry(dist, sidewalkWidth);
+          const offsetX = Math.cos(angle + Math.PI/2) * (roadWidth/2 + sidewalkWidth/2);
+          const offsetZ = Math.sin(angle + Math.PI/2) * (roadWidth/2 + sidewalkWidth/2);
+
+          const swRight = new THREE.Mesh(swGeo, sidewalkMat);
+          swRight.rotation.x = -Math.PI / 2;
+          swRight.rotation.z = -angle;
+          swRight.position.set((p1.x + p2.x) / 2 + offsetX, this.sidewalkHeight / 2, (p1.z + p2.z) / 2 + offsetZ);
+          swRight.receiveShadow = true;
+          this.streetsGroup.add(swRight);
+
+          const swLeft = new THREE.Mesh(swGeo, sidewalkMat);
+          swLeft.rotation.x = -Math.PI / 2;
+          swLeft.rotation.z = -angle;
+          swLeft.position.set((p1.x + p2.x) / 2 - offsetX, this.sidewalkHeight / 2, (p1.z + p2.z) / 2 - offsetZ);
+          swLeft.receiveShadow = true;
+          this.streetsGroup.add(swLeft);
+
+          // 3. Markings
+          const dashLen = 15;
+          const dashGap = 15;
+          const dashCount = Math.floor(dist / (dashLen + dashGap));
+          for (let i = 0; i < dashCount; i++) {
+            const dash = new THREE.Mesh(new THREE.PlaneGeometry(dashLen, 2), markMat);
+            const t = (i * (dashLen + dashGap) + (dashLen + dashGap)/2) / dist;
+            dash.rotation.x = -Math.PI / 2;
+            dash.rotation.z = -angle;
+            dash.position.set(p1.x + dx * t, 0.18, p1.z + dz * t);
+            this.streetsGroup.add(dash);
+          }
         }
       });
     });
 
-    // Dots
+    // 4. Fill Intersections with clean Caps
+    const capGeo = new THREE.CircleGeometry((roadWidth + sidewalkWidth * 2) / 2, 32);
+    const capMat = new THREE.MeshStandardMaterial({ color: sidewalkColor, roughness: 0.8 });
+    const roadCapMat = new THREE.MeshStandardMaterial({ color: roadColor, roughness: 0.6 });
+
+    nodes.forEach(node => {
+        const p = visualPositions.get(node.id)!;
+        // Sidewalk level cap
+        const cap = new THREE.Mesh(capGeo, capMat);
+        cap.rotation.x = -Math.PI / 2;
+        cap.position.set(p.x, this.sidewalkHeight / 2 - 0.01, p.z);
+        this.streetsGroup.add(cap);
+
+        // Road level cap
+        const roadCap = new THREE.Mesh(new THREE.CircleGeometry(roadWidth / 2, 32), roadCapMat);
+        roadCap.rotation.x = -Math.PI / 2;
+        roadCap.position.set(p.x, 0.12, p.z);
+        roadCap.receiveShadow = true;
+        roadCap.castShadow = false; // Road parts should not cast shadows on each other
+        this.streetsGroup.add(roadCap);
+    });
+
+    // 5. Dots
     const dots = this.engine.getDots();
     const dotGeo = new THREE.BoxGeometry(3, 3, 3);
     const dotMat = new THREE.MeshStandardMaterial({ color: 0xffde00, emissive: 0xffde00, emissiveIntensity: 0.5 });
     dots.forEach(dot => {
       if (!dot) return;
-      const pos = this.latLonToWorld(dot.lat, dot.lon);
+      // Snap dot to visual road pos
+      const pos = visualPositions.get(dot.id) || this.latLonToWorld(dot.lat, dot.lon);
       const mesh = new THREE.Mesh(dotGeo, dotMat);
-      mesh.position.copy(pos);
-      mesh.position.y = 5;
-      mesh.castShadow = true;
+      mesh.position.set(pos.x, 5, pos.z);
+      mesh.castShadow = false; // Disable shadows to keep road surface clean
       this.dotsGroup.add(mesh);
     });
 
@@ -340,28 +521,79 @@ export class Renderer3D implements IRenderer {
   private buildBuildings3D() {
     this.buildingsGroup.clear();
     const buildings = this.engine.getBuildings();
-    const buildingMat = new THREE.MeshStandardMaterial({ color: 0x112233, roughness: 0.3, metalness: 0.2 });
+    
+    // Warm Earth/Yellowish/Brownish palette (No Grays to distinguish from road)
+    const buildingColors = [
+      0xeedd82, // Light Yellowish
+      0xd2b48c, // Tan / Sand
+      0xbc8f8f, // Rosy Brown
+      0xdeb887, // Burlywood
+      0xf4a460, // Sandy Brown
+      0xcd853f, // Peru (Earth tone)
+      0x8b4513  // Saddle Brown
+    ];
 
     buildings.forEach(building => {
+      let centerX = 0;
+      let centerZ = 0;
+      building.nodes.forEach(node => {
+        const p = this.latLonToWorld(node.lat, node.lon);
+        centerX += p.x;
+        centerZ += p.z;
+      });
+      centerX /= building.nodes.length;
+      centerZ /= building.nodes.length;
+
       const shape = new THREE.Shape();
       building.nodes.forEach((node, i) => {
         const p = this.latLonToWorld(node.lat, node.lon);
-        if (i === 0) shape.moveTo(p.x, -p.z);
-        else shape.lineTo(p.x, -p.z);
+        
+        // Scale down footprint even more (0.75x) to guarantee clearance
+        const relX = (p.x - centerX) * 0.75;
+        const relZ = (p.z - centerZ) * 0.75;
+        
+        if (i === 0) shape.moveTo(relX, -relZ);
+        else shape.lineTo(relX, -relZ);
       });
 
+      // Even shorter buildings for better visibility
+      const height = 10 + Math.random() * 15; 
       const extrudeSettings = {
         steps: 1,
-        depth: 20 + Math.random() * 40,
-        beveled: false
+        depth: height,
+        bevelEnabled: true,
+        bevelThickness: 0.3,
+        bevelSize: 0.3,
+        bevelOffset: 0,
+        bevelSegments: 1
       };
+
+      const baseColor = buildingColors[Math.floor(Math.random() * buildingColors.length)];
+      const buildingMat = new THREE.MeshStandardMaterial({ 
+        color: baseColor, 
+        roughness: 0.8, 
+        metalness: 0.05 
+      });
 
       const geo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
       const mesh = new THREE.Mesh(geo, buildingMat);
+      
       mesh.rotation.x = -Math.PI / 2;
+      mesh.position.set(centerX, this.sidewalkHeight, centerZ);
+      
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       this.buildingsGroup.add(mesh);
+
+      // Dach
+      const roofColor = new THREE.Color(baseColor).multiplyScalar(0.7);
+      const roofMat = new THREE.MeshStandardMaterial({ color: roofColor, roughness: 0.9 });
+      const roofGeo = new THREE.ExtrudeGeometry(shape, { steps: 1, depth: 0.5, bevelEnabled: false });
+      const roofMesh = new THREE.Mesh(roofGeo, roofMat);
+      roofMesh.rotation.x = -Math.PI / 2;
+      roofMesh.position.set(centerX, this.sidewalkHeight + height + 0.02, centerZ);
+      roofMesh.castShadow = true;
+      this.buildingsGroup.add(roofMesh);
     });
   }
 
@@ -369,10 +601,12 @@ export class Renderer3D implements IRenderer {
     this.treesGroup.clear();
     const trees = this.engine.getTrees();
 
-    const trunkGeo = new THREE.CylinderGeometry(2, 2, 15, 8);
-    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x3d2b1f });
-    const foliageGeo = new THREE.ConeGeometry(8, 20, 8);
-    const foliageMat = new THREE.MeshStandardMaterial({ color: 0x2d5a27 });
+    const trunkGeo = new THREE.CylinderGeometry(2, 3, 15, 6);
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5d4037 });
+    
+    // Satteres Grün für Low-Poly Bäume
+    const foliageGeo = new THREE.ConeGeometry(12, 25, 6);
+    const foliageMat = new THREE.MeshStandardMaterial({ color: 0x4caf50, roughness: 0.6 });
 
     trees.forEach(tree => {
       const group = new THREE.Group();
@@ -383,11 +617,16 @@ export class Renderer3D implements IRenderer {
       trunk.castShadow = true;
 
       const foliage = new THREE.Mesh(foliageGeo, foliageMat);
-      foliage.position.y = 20;
+      foliage.position.y = 22;
       foliage.castShadow = true;
+
+      const foliage2 = new THREE.Mesh(new THREE.ConeGeometry(10, 20, 6), foliageMat);
+      foliage2.position.y = 30;
+      foliage2.castShadow = true;
 
       group.add(trunk);
       group.add(foliage);
+      group.add(foliage2);
       group.position.copy(p);
       this.treesGroup.add(group);
     });
@@ -419,6 +658,7 @@ export class Renderer3D implements IRenderer {
       const mesh = new THREE.Mesh(rGeo, rMat);
       mesh.position.copy(pos);
       mesh.position.y = 10 + Math.sin(performance.now() / 200) * 3;
+      mesh.castShadow = true; // Floating items should cast shadows
       mesh.rotation.y += performance.now() / 500;
       mesh.rotation.x = Math.PI; // point down
       this.itemsGroup.add(mesh);
@@ -443,8 +683,8 @@ export class Renderer3D implements IRenderer {
         this.pacMesh.visible = true;
       }
 
-      // Set position directly to avoid "vanishing" or extreme lag
-      this.pacMesh.position.copy(pos);
+      // Lift Pacman off the ground (hovering at y=15)
+      this.pacMesh.position.set(pos.x, 15, pos.z);
 
       // Mouth animation
       const upper = this.pacMesh.getObjectByName('upperMouth') as THREE.Group;
@@ -549,6 +789,14 @@ export class Renderer3D implements IRenderer {
         const ball = new THREE.Mesh(new THREE.SphereGeometry(2, 8, 8), gMat);
         ball.position.y = 16;
         group.add(ant, ball);
+
+        // Enable shadows for all parts
+        group.traverse(child => {
+          if ((child as any).isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+          }
+        });
 
         group.position.y = 10;
         this.ghostGroup.add(group);

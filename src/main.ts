@@ -10,6 +10,7 @@ let map: L.Map;
 let streetLayer: L.TileLayer;
 let satelliteLayer: L.TileLayer;
 let currentTheme: 'street' | 'pacman' | 'satellite' | '3d' = 'street';
+let last2DTheme: 'street' | 'pacman' | 'satellite' = 'street';
 let userPos: [number, number] = [51.505, -0.09];
 let currentRotation = 0;
 let activeKey: 'ArrowUp'|'ArrowDown'|'ArrowLeft'|'ArrowRight' | null = null;
@@ -85,6 +86,7 @@ const HUD = {
   score: document.getElementById('score') as HTMLElement,
   lives: document.getElementById('lives') as HTMLElement,
   viewToggle: document.getElementById('view-toggle') as HTMLButtonElement,
+  mode3DToggle: document.getElementById('mode-3d-toggle') as HTMLButtonElement,
   loading: document.getElementById('loading-screen') as HTMLElement,
   gameOverScreen: document.getElementById('game-over-screen') as HTMLElement,
   finalScore: document.getElementById('final-score') as HTMLElement,
@@ -228,52 +230,32 @@ function switchCity(lat: number, lon: number) {
   fetchNearbyStreets(lat, lon);
 }
 
-// --- View Toggle ---
-HUD.viewToggle.innerText = 'Street View';
-HUD.viewToggle.addEventListener('click', function() { // Use function() to get 'this' context
+// --- View Toggle Logic Refactored ---
+function applyTheme(targetTheme: 'street' | 'pacman' | 'satellite' | '3d') {
   const mapEl = document.getElementById('app');
   mapEl?.classList.remove('theme-street', 'theme-pacman', 'theme-satellite', 'theme-3d');
   
-  let targetTheme: 'street' | 'pacman' | 'satellite' | '3d';
-  let targetText: string;
-
-  if (this.innerText === 'Satellite View') {
-    targetTheme = 'street';
-    targetText = 'Street View';
-  } else if (this.innerText === 'Street View') {
-    targetTheme = 'pacman';
-    targetText = 'Vibe-Man View';
-  } else if (this.innerText === 'Vibe-Man View') {
-    targetTheme = '3d';
-    targetText = '3D View';
-  } else {
-    // 3D View -> Satellite View
-    targetTheme = 'satellite';
-    targetText = 'Satellite View';
-  }
-
-  // Handle switching renderer instance
   const isTarget3D = targetTheme === '3d';
   const isCurrent3D = currentTheme === '3d';
+
   if (isTarget3D && !isCurrent3D) {
-     if(renderer) renderer.destroy();
-     renderer = new Renderer3D(engine);
-     renderer.init(document.getElementById('map')!);
-     renderer.bindMap(map, canvas, ctx);
+      if(renderer) renderer.destroy();
+      renderer = new Renderer3D(engine);
+      renderer.init(document.getElementById('map')!);
+      renderer.bindMap(map, canvas, ctx);
   } else if (!isTarget3D && isCurrent3D) {
-     if(renderer) renderer.destroy();
-     renderer = new Renderer2D(engine);
-     renderer.init(document.getElementById('map')!);
-     renderer.bindMap(map, canvas, ctx);
+      if(renderer) renderer.destroy();
+      renderer = new Renderer2D(engine);
+      renderer.init(document.getElementById('map')!);
+      renderer.bindMap(map, canvas, ctx);
   }
 
   currentTheme = targetTheme;
-  this.innerText = targetText;
-
-  mapEl?.classList.add('theme-' + currentTheme);
-
   if (currentTheme !== '3d') {
-    // Handling 2D map layers
+    last2DTheme = currentTheme;
+    canvas.style.display = 'block';
+    
+    // Update Leaflet layers
     if (currentTheme === 'satellite') {
       map.addLayer(satelliteLayer);
       map.removeLayer(streetLayer);
@@ -281,15 +263,50 @@ HUD.viewToggle.addEventListener('click', function() { // Use function() to get '
       map.addLayer(streetLayer);
       map.removeLayer(satelliteLayer);
     }
-    canvas.style.display = 'block';
   } else {
-    // 3D might want to hide the 2D overlay and maps
     map.removeLayer(satelliteLayer);
     map.removeLayer(streetLayer);
     canvas.style.display = 'none';
   }
 
-  drawFrame(); // Force redraw on switch
+  mapEl?.classList.add('theme-' + currentTheme);
+  
+  // Update Button Texts
+  if (currentTheme === '3d') {
+    HUD.mode3DToggle.innerText = 'Exit 3D';
+    HUD.mode3DToggle.classList.add('active');
+  } else {
+    HUD.mode3DToggle.innerText = '3D View';
+    HUD.mode3DToggle.classList.remove('active');
+  }
+
+  if (last2DTheme === 'street') HUD.viewToggle.innerText = 'Street View';
+  else if (last2DTheme === 'satellite') HUD.viewToggle.innerText = 'Satellite View';
+  else HUD.viewToggle.innerText = 'Vibe-Man View';
+
+  drawFrame(); 
+}
+
+// Initial state label
+HUD.viewToggle.innerText = 'Street View';
+HUD.mode3DToggle.innerText = '3D View';
+
+HUD.viewToggle.addEventListener('click', () => {
+  // Cycle only 2D themes
+  let next2D: 'street' | 'pacman' | 'satellite';
+  if (last2DTheme === 'street') next2D = 'satellite';
+  else if (last2DTheme === 'satellite') next2D = 'pacman';
+  else next2D = 'street';
+
+  applyTheme(next2D);
+});
+
+HUD.mode3DToggle.addEventListener('click', () => {
+  if (currentTheme === '3d') {
+    applyTheme(last2DTheme);
+  } else {
+    applyTheme('3d');
+  }
 });
 
 // --- Overpass API ---

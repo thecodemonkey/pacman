@@ -268,6 +268,13 @@ body {
   transform: translateY(-1px);
 }
 
+.glass-btn.active {
+  background: rgba(255, 210, 47, 0.2);
+  border-color: #ffd22f;
+  color: #ffd22f;
+  box-shadow: 0 0 10px rgba(255, 210, 47, 0.3);
+}
+
 .theme-street .glass-btn {
   background: rgba(0, 0, 0, 0.05);
   border-color: rgba(0, 0, 0, 0.15);
