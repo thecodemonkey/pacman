@@ -47,16 +47,20 @@ export class Renderer3D implements IRenderer {
 
   private currentRotation = 0;
   private isRespawning = false;
+  private dirLight?: THREE.DirectionalLight;
+  // Cached jaw materials — never recreate per-frame
+  private jawMatNormal = new THREE.MeshStandardMaterial({ color: 0x222233, roughness: 0.2, metalness: 0.5 });
+  private jawMatPowerUp: THREE.MeshStandardMaterial | null = null;
+  private jawPowerUpActive = false;
 
   // Camera orbital parameters
-  private camAngle = 0; // Horizontal rotation
-  private camTilt = 45; // Vertical tilt in degrees
-  private camDistance = 450; // Distance from target
+  private camAngle = 0;      // Horizontal rotation offset (mouse look)
+  private camTilt = 55;      // Vertical tilt: 55° = schräg von oben (more oblique)
+  private camDistance = 200; // Distance from target (closer for 3rd person view)
 
   // Interaction state
   private isPointerDown = false;
   private lastPointerPos = { x: 0, y: 0 };
-  private sidewalkHeight = 0.8;
 
   constructor(engine: GameEngine) {
     this.engine = engine;
@@ -109,35 +113,39 @@ export class Renderer3D implements IRenderer {
     this.renderer.setSize(w, h);
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    // PCFSoft gives smoother, more realistic shadow edges
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     (this.renderer as any).outputColorSpace = THREE.SRGBColorSpace; // Better color accuracy
 
     // Canvas styling to overlay Leaflet map
     this.renderer.domElement.style.position = 'absolute';
     this.renderer.domElement.style.top = '0';
     this.renderer.domElement.style.left = '0';
-    this.renderer.domElement.style.zIndex = '600'; 
-    this.renderer.domElement.style.pointerEvents = 'none'; 
+    this.renderer.domElement.style.zIndex = '600';
+    this.renderer.domElement.style.pointerEvents = 'none';
     container.appendChild(this.renderer.domElement);
 
     // Lighting config - Balanced Sunset Hues (Lighter atmosphere)
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7); // Neutral brighter ambient
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.65); // Slightly lower to make shadows more visible
     this.scene.add(ambientLight);
 
-    const dirLight = new THREE.DirectionalLight(0xfff0dd, 0.8); // Softer warm white light
-    dirLight.position.set(500, 400, -800);
+    const dirLight = new THREE.DirectionalLight(0xfff0dd, 1.0);
+    dirLight.position.set(800, 1200, 400);
     dirLight.castShadow = true;
-    dirLight.shadow.mapSize.width = 2048;
-    dirLight.shadow.mapSize.height = 2048;
-    dirLight.shadow.camera.near = 0.5;
-    dirLight.shadow.camera.far = 4000;
-    dirLight.shadow.bias = -0.0005; // Help with shadow acne on tiles
-    const ext = 2000;
+    dirLight.shadow.mapSize.width = 4096;
+    dirLight.shadow.mapSize.height = 4096;
+    dirLight.shadow.camera.near = 1;
+    dirLight.shadow.camera.far = 3000;
+    dirLight.shadow.bias = 0.001;   // positive bias pins shadow to surface, eliminates float
+    dirLight.shadow.normalBias = 0.05;
+    const ext = 600; // tighter frustum — follows Pac-Man so no need for map-wide coverage
     dirLight.shadow.camera.left = -ext;
     dirLight.shadow.camera.right = ext;
     dirLight.shadow.camera.top = ext;
     dirLight.shadow.camera.bottom = -ext;
+    this.dirLight = dirLight;
     this.scene.add(dirLight);
+    this.scene.add(dirLight.target); // target must be in scene for it to update
 
     // Gradient Sky Background (Large Sphere)
     const skyGeo = new THREE.SphereGeometry(4500, 32, 32);
@@ -187,9 +195,10 @@ export class Renderer3D implements IRenderer {
     moon.lookAt(0, 800, 800); // Orient towards camera
     this.scene.add(moon);
 
-    // Ground plane (Large green area)
+    // Ground plane - use block/city colour so roads sit on top cleanly
+    // Roads are at Y=0.0; ground at Y=-0.5 → half-unit gap, zero z-fighting possible
     const groundGeo = new THREE.PlaneGeometry(10000, 10000);
-    const groundMat = new THREE.MeshStandardMaterial({ color: 0x2d4c1e, roughness: 0.9 }); // Darker green for sunset contrast
+    const groundMat = new THREE.MeshStandardMaterial({ color: 0x677252, roughness: 0.95 }); // Grass green
     const ground = new THREE.Mesh(groundGeo, groundMat);
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = -0.5;
@@ -216,17 +225,19 @@ export class Renderer3D implements IRenderer {
 
     // Pacman mesh (Mechanical Look)
     this.pacMesh = new THREE.Group();
-    
-    const sphereMat = new THREE.MeshStandardMaterial({
-      color: 0xffd22f, // Pacman Yellow
+
+    // Dedicated yellow material for the mouth interior (palate + jaw floor + inner hood).
+    // Kept separate from sphereMat so the body color can change independently.
+    const mouthInteriorMat = new THREE.MeshStandardMaterial({
+      color: 0xffd22f,   // Pac-Man yellow
       roughness: 0.3,
-      metalness: 0.2
+      metalness: 0.1,
     });
 
     const jawMat = new THREE.MeshStandardMaterial({
-      color: 0x141c28, // Dark Blue secondary
-      roughness: 0.4,
-      metalness: 0.1
+      color: 0x6677aa,
+      roughness: 0.2,
+      metalness: 0.5,
     });
 
     // Upper Jaw
@@ -238,13 +249,22 @@ export class Renderer3D implements IRenderer {
     upperMesh.receiveShadow = true;
     upperGroup.add(upperMesh);
 
-    // Hood accent (smaller semi-sphere inside)
+    // Hood accent (smaller semi-sphere inside → yellow interior)
     const hoodGeo = new THREE.SphereGeometry(11, 32, 32, 0, Math.PI * 2, 0, Math.PI / 2);
-    const hoodMesh = new THREE.Mesh(hoodGeo, sphereMat);
+    const hoodMesh = new THREE.Mesh(hoodGeo, mouthInteriorMat);
     hoodMesh.scale.set(0.9, 0.9, 0.9);
     hoodMesh.castShadow = true;
     hoodMesh.receiveShadow = true;
     upperGroup.add(hoodMesh);
+
+    // Gaumen (palate) – yellow disc closing the flat opening of the upper jaw.
+    // The SphereGeometry is open at y=0 (equatorial cut), so we cap it with a circle.
+    // rotation.x = +PI/2 makes the disc face downward (into the mouth).
+    const palateGeo = new THREE.CircleGeometry(11.8, 48);
+    const palateMesh = new THREE.Mesh(palateGeo, mouthInteriorMat); // yellow interior
+    palateMesh.rotation.x = Math.PI / 2; // face downward
+    palateMesh.position.y = 0;
+    upperGroup.add(palateMesh);
 
     // Upper Teeth
     const teethCount = 7;
@@ -269,26 +289,59 @@ export class Renderer3D implements IRenderer {
     lowerMesh.receiveShadow = true;
     lowerGroup.add(lowerMesh);
 
+    // Unterkieferfläche – yellow disc closing the flat opening of the lower jaw.
+    // rotation.x = -PI/2 makes the disc face upward (toward the palate).
+    const jawFloorGeo = new THREE.CircleGeometry(11.8, 48);
+    const jawFloorMesh = new THREE.Mesh(jawFloorGeo, mouthInteriorMat); // yellow interior
+    jawFloorMesh.rotation.x = -Math.PI / 2; // face upward
+    jawFloorMesh.position.y = 0;
+    lowerGroup.add(jawFloorMesh);
+
     // Lower Teeth
     for (let i = 0; i < teethCount; i++) {
-        const tooth = new THREE.Mesh(teethGeo, teethMat);
-        const angle = (i / (teethCount - 1)) * Math.PI - Math.PI / 2;
-        tooth.position.set(11.5 * Math.cos(angle), 1.5, 11.5 * Math.sin(angle));
-        tooth.castShadow = true;
-        lowerGroup.add(tooth);
+      const tooth = new THREE.Mesh(teethGeo, teethMat);
+      const angle = (i / (teethCount - 1)) * Math.PI - Math.PI / 2;
+      tooth.position.set(11.5 * Math.cos(angle), 1.5, 11.5 * Math.sin(angle));
+      tooth.castShadow = true;
+      lowerGroup.add(tooth);
     }
     this.pacMesh.add(lowerGroup);
 
-    // X-Eye (Billboard)
-    const eyeGroup = new THREE.Group();
-    eyeGroup.name = 'xEye';
-    const markerMat = new THREE.LineBasicMaterial({ color: 0xffd22f, linewidth: 2 });
-    const line1Geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-3, -3, 0), new THREE.Vector3(3, 3, 0)]);
-    const line2Geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(3, -3, 0), new THREE.Vector3(-3, 3, 0)]);
-    eyeGroup.add(new THREE.Line(line1Geo, markerMat));
-    eyeGroup.add(new THREE.Line(line2Geo, markerMat));
-    eyeGroup.position.set(0, 16, 0); // Above head
-    this.pacMesh.add(eyeGroup);
+    // ── EYES: Two glowing yellow X-shaped eyes on the sides of the head ──────
+    // Placed higher up and further back ("oberhalb und hinter dem kiefer an der seite").
+    // Sphere radius is 12. Point (2.0, 9.0, ±7.7) lies on the surface.
+    const eyeMat = new THREE.MeshStandardMaterial({
+      color: 0xffde00,
+      emissive: 0xffde00,
+      emissiveIntensity: 0.8
+    });
+    // Each arm is formed flat in the XY plane. thin in Z (depth).
+    const armGeo = new THREE.BoxGeometry(4.0, 0.8, 0.4);
+
+    const eyeOffsets = [
+      new THREE.Vector3(2.0, 9.0, 7.7),   // Left side
+      new THREE.Vector3(2.0, 9.0, -7.7),  // Right side
+    ];
+
+    eyeOffsets.forEach((pos, idx) => {
+      const eg = new THREE.Group();
+      eg.name = idx === 0 ? 'eyeLeft' : 'eyeRight';
+      eg.position.copy(pos);
+
+      // Align the group so it points straight outward from the center (normal).
+      // The arms (geometry in XY plane) will lay flat against the sphere's surface.
+      eg.lookAt(pos.clone().multiplyScalar(2));
+
+      // Cross arms at 45 degree angles to form an X.
+      const arm1 = new THREE.Mesh(armGeo, eyeMat);
+      arm1.rotation.z = Math.PI / 4;  // +45° 
+      const arm2 = new THREE.Mesh(armGeo, eyeMat);
+      arm2.rotation.z = -Math.PI / 4;  // -45° 
+
+      eg.add(arm1, arm2);
+      if (this.pacMesh) this.pacMesh.add(eg);
+    });
+
 
     this.scene.add(this.pacMesh);
 
@@ -332,7 +385,7 @@ export class Renderer3D implements IRenderer {
 
     container.addEventListener('wheel', (e) => {
       e.preventDefault();
-      this.camDistance = Math.min(1500, Math.max(150, this.camDistance + e.deltaY * 0.5));
+      this.camDistance = Math.min(1500, Math.max(50, this.camDistance + e.deltaY * 0.5));
     }, { passive: false });
 
     // Simple touch support
@@ -372,130 +425,88 @@ export class Renderer3D implements IRenderer {
       this.baseLon = firstNode.lon;
     }
 
-    // Colors and Materials (Light Gray theme)
-    const roadColor = 0xcccccc; // Brighter Gray
-    const sidewalkColor = 0xeeeeee; // Clean Off-White
-    const roadMat = new THREE.MeshStandardMaterial({ 
-      color: roadColor, 
-      roughness: 0.6,
-      polygonOffset: true,
-      polygonOffsetFactor: 1,
-      polygonOffsetUnits: 1
-    });
-    const sidewalkMat = new THREE.MeshStandardMaterial({ 
-      color: sidewalkColor, 
+    // Colors and Materials - road only; ground plane provides block-plot colour below
+    const roadColor = 0xa8a8a8; // Clear medium gray road
+
+    // polygonOffset pulls road slightly toward camera at intersections
+    // where two crossing road planes share the same Y=0.0, preventing z-fighting
+    const roadMat = new THREE.MeshStandardMaterial({
+      color: roadColor,
       roughness: 0.8,
       polygonOffset: true,
       polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1
+      polygonOffsetUnits: -1,
     });
-    const markMat = new THREE.MeshBasicMaterial({ 
-      color: 0xffffff,
-      polygonOffset: true,
-      polygonOffsetFactor: -4, // Higher offset to be definitely on top
-      polygonOffsetUnits: -4
-    });
-    
-    const roadWidth = 50; 
-    const sidewalkWidth = 6; // Narrower sidewalks
-    
+
+    const roadWidth = 22;  // narrow streets — blocks are clearly visible between
+    const Y_ROAD = 0.0;
+
     // 1. Visual Simplification: Snap close nodes to a grid for cleaner layout
-    // This reduces "frayed" edges where too many tiny segments meet
     const visualPositions = new Map<string, THREE.Vector3>();
-    const snapGrid = 40; 
+    const snapGrid = 40;
 
     nodes.forEach(node => {
-        const raw = this.latLonToWorld(node.lat, node.lon);
-        const sx = Math.round(raw.x / snapGrid) * snapGrid;
-        const sz = Math.round(raw.z / snapGrid) * snapGrid;
-        visualPositions.set(node.id, new THREE.Vector3(sx, raw.y, sz));
+      const raw = this.latLonToWorld(node.lat, node.lon);
+      const sx = Math.round(raw.x / snapGrid) * snapGrid;
+      const sz = Math.round(raw.z / snapGrid) * snapGrid;
+      visualPositions.set(node.id, new THREE.Vector3(sx, 0, sz));
     });
+
+    // Collect all snapped node positions for building exclusion check
+    const roadNodePositions: THREE.Vector3[] = [];
+    visualPositions.forEach(v => roadNodePositions.push(v));
+    (this as any)._roadNodePositions = roadNodePositions;
+    (this as any)._roadWidth = roadWidth;
+    (this as any)._visualPositions = visualPositions; // needed for road-aligned building placement
 
     const drawnEdges = new Set<string>();
 
+    const drawnIntersections = new Set<string>();
+    const circleGeo = new THREE.CircleGeometry(roadWidth * 0.5, 12);
+
     nodes.forEach(node => {
       const p1 = visualPositions.get(node.id)!;
+
+      // ── ROUNDED CAP — only at true intersections (3+ roads) or dead-ends ──
+      // Straight-through waypoints (exactly 2 neighbors) get no cap to avoid
+      // the "puddle" appearance along smooth road sections.
+      const iKey = `${p1.x},${p1.z}`;
+      if (!drawnIntersections.has(iKey) && node.neighbors.length !== 2) {
+        drawnIntersections.add(iKey);
+        const cap = new THREE.Mesh(circleGeo, roadMat);
+        cap.rotation.x = -Math.PI / 2;
+        cap.position.set(p1.x, Y_ROAD + 0.02, p1.z);
+        cap.receiveShadow = true;
+        this.streetsGroup.add(cap);
+      }
+
       node.neighbors.forEach(nId => {
         const target = nodes.get(nId);
-        if (target) {
-          const edgeId = [node.id, nId].sort().join('-');
-          if (drawnEdges.has(edgeId)) return;
-          drawnEdges.add(edgeId);
+        if (!target) return;
 
-          const p2 = visualPositions.get(nId)!;
-          
-          const dx = p2.x - p1.x;
-          const dz = p2.z - p1.z;
-          const dist = Math.sqrt(dx * dx + dz * dz);
-          
-          if (dist < 10) return; // Ignore zero-length or tiny segments after snapping
+        const edgeId = [node.id, nId].sort().join('-');
+        if (drawnEdges.has(edgeId)) return;
+        drawnEdges.add(edgeId);
 
-          const angle = Math.atan2(dz, dx);
+        const p2 = visualPositions.get(nId)!;
+        const dx = p2.x - p1.x;
+        const dz = p2.z - p1.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist < 10) return;
 
-          // 1. Road Segment
-          const roadGeo = new THREE.PlaneGeometry(dist, roadWidth);
-          const road = new THREE.Mesh(roadGeo, roadMat);
-          road.rotation.x = -Math.PI / 2;
-          road.rotation.z = -angle; 
-          road.position.set((p1.x + p2.x) / 2, 0.1, (p1.z + p2.z) / 2);
-          road.receiveShadow = true;
-          this.streetsGroup.add(road);
+        const angle = Math.atan2(dz, dx);
+        const midX = (p1.x + p2.x) / 2;
+        const midZ = (p1.z + p2.z) / 2;
 
-          // 2. Sidewalks
-          const swGeo = new THREE.PlaneGeometry(dist, sidewalkWidth);
-          const offsetX = Math.cos(angle + Math.PI/2) * (roadWidth/2 + sidewalkWidth/2);
-          const offsetZ = Math.sin(angle + Math.PI/2) * (roadWidth/2 + sidewalkWidth/2);
-
-          const swRight = new THREE.Mesh(swGeo, sidewalkMat);
-          swRight.rotation.x = -Math.PI / 2;
-          swRight.rotation.z = -angle;
-          swRight.position.set((p1.x + p2.x) / 2 + offsetX, this.sidewalkHeight / 2, (p1.z + p2.z) / 2 + offsetZ);
-          swRight.receiveShadow = true;
-          this.streetsGroup.add(swRight);
-
-          const swLeft = new THREE.Mesh(swGeo, sidewalkMat);
-          swLeft.rotation.x = -Math.PI / 2;
-          swLeft.rotation.z = -angle;
-          swLeft.position.set((p1.x + p2.x) / 2 - offsetX, this.sidewalkHeight / 2, (p1.z + p2.z) / 2 - offsetZ);
-          swLeft.receiveShadow = true;
-          this.streetsGroup.add(swLeft);
-
-          // 3. Markings
-          const dashLen = 15;
-          const dashGap = 15;
-          const dashCount = Math.floor(dist / (dashLen + dashGap));
-          for (let i = 0; i < dashCount; i++) {
-            const dash = new THREE.Mesh(new THREE.PlaneGeometry(dashLen, 2), markMat);
-            const t = (i * (dashLen + dashGap) + (dashLen + dashGap)/2) / dist;
-            dash.rotation.x = -Math.PI / 2;
-            dash.rotation.z = -angle;
-            dash.position.set(p1.x + dx * t, 0.18, p1.z + dz * t);
-            this.streetsGroup.add(dash);
-          }
-        }
+        // ── ROAD SEGMENT ─────────────────────────────────────────────────────
+        const road = new THREE.Mesh(new THREE.PlaneGeometry(dist, roadWidth), roadMat);
+        road.rotation.x = -Math.PI / 2;
+        road.rotation.z = -angle;
+        road.position.set(midX, Y_ROAD, midZ);
+        road.receiveShadow = true;
+        road.castShadow = false;
+        this.streetsGroup.add(road);
       });
-    });
-
-    // 4. Fill Intersections with clean Caps
-    const capGeo = new THREE.CircleGeometry((roadWidth + sidewalkWidth * 2) / 2, 32);
-    const capMat = new THREE.MeshStandardMaterial({ color: sidewalkColor, roughness: 0.8 });
-    const roadCapMat = new THREE.MeshStandardMaterial({ color: roadColor, roughness: 0.6 });
-
-    nodes.forEach(node => {
-        const p = visualPositions.get(node.id)!;
-        // Sidewalk level cap
-        const cap = new THREE.Mesh(capGeo, capMat);
-        cap.rotation.x = -Math.PI / 2;
-        cap.position.set(p.x, this.sidewalkHeight / 2 - 0.01, p.z);
-        this.streetsGroup.add(cap);
-
-        // Road level cap
-        const roadCap = new THREE.Mesh(new THREE.CircleGeometry(roadWidth / 2, 32), roadCapMat);
-        roadCap.rotation.x = -Math.PI / 2;
-        roadCap.position.set(p.x, 0.12, p.z);
-        roadCap.receiveShadow = true;
-        roadCap.castShadow = false; // Road parts should not cast shadows on each other
-        this.streetsGroup.add(roadCap);
     });
 
     // 5. Dots
@@ -520,80 +531,83 @@ export class Renderer3D implements IRenderer {
 
   private buildBuildings3D() {
     this.buildingsGroup.clear();
-    const buildings = this.engine.getBuildings();
-    
-    // Warm Earth/Yellowish/Brownish palette (No Grays to distinguish from road)
-    const buildingColors = [
-      0xeedd82, // Light Yellowish
-      0xd2b48c, // Tan / Sand
-      0xbc8f8f, // Rosy Brown
-      0xdeb887, // Burlywood
-      0xf4a460, // Sandy Brown
-      0xcd853f, // Peru (Earth tone)
-      0x8b4513  // Saddle Brown
-    ];
+    // Buildings are now generated procedurally along roads (not from OSM building data)
 
-    buildings.forEach(building => {
-      let centerX = 0;
-      let centerZ = 0;
-      building.nodes.forEach(node => {
-        const p = this.latLonToWorld(node.lat, node.lon);
-        centerX += p.x;
-        centerZ += p.z;
+    // Stadtvillen color palette — classic European city house colors
+    const wallColors = [0xe8d5b0, 0xf0e0a0, 0xd4b896, 0xc9a87c, 0xe2c9a0, 0xdfc080, 0xcbb99a];
+    const roofColors = [0x8b3a2a, 0xa0452d, 0x7a3525, 0xb55040, 0x6b3530];
+
+    const roadWidth: number = (this as any)._roadWidth ?? 22;
+    const visualPositions: Map<string, THREE.Vector3> = (this as any)._visualPositions;
+    if (!visualPositions) return;
+
+    const nodes = this.engine.getNodes();
+    const drawnEdges = new Set<string>();
+
+    // Spacing along road: each "slot" is ~30 units, buildings fill ~22 units of that
+    const SLOT = 30;   // slot length along road
+    const BUILD_W = 22;   // building width along road
+    const BUILD_D = 16;   // building depth (into the block)
+    const SETBACK = 2;    // gap between road edge and building face
+    const FACE_DIST = roadWidth / 2 + SETBACK + BUILD_D / 2; // road center → building center
+
+    nodes.forEach(node => {
+      node.neighbors.forEach(nId => {
+        const edgeId = [node.id, nId].sort().join('-');
+        if (drawnEdges.has(edgeId)) return;
+        drawnEdges.add(edgeId);
+
+        const p1 = visualPositions.get(node.id);
+        const p2 = visualPositions.get(nId);
+        if (!p1 || !p2) return;
+
+        const dx = p2.x - p1.x, dz = p2.z - p1.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist < SLOT * 2) return; // too short for any buildings
+
+        const angle = Math.atan2(dz, dx);
+        const ux = dx / dist, uz = dz / dist;       // unit along road
+        const px = -uz, pz = ux;             // unit perpendicular (left side)
+
+        // Number of building slots that fit between the intersection clearances
+        const usable = dist - SLOT; // leave one slot gap at each end
+        const numSlots = Math.floor(usable / SLOT);
+        if (numSlots < 1) return;
+
+        for (let s = 0; s < numSlots; s++) {
+          // Center of slot along the road segment
+          const t = SLOT / 2 + s * SLOT + (usable - numSlots * SLOT) / 2 + SLOT / 2;
+          const cx = p1.x + ux * t;
+          const cz = p1.z + uz * t;
+
+          for (const side of [1, -1]) {
+            const bHeight = 14 + Math.random() * 8; // 14–22 units (Stadtvillen: 3-4 floors)
+            const bx = cx + px * FACE_DIST * side;
+            const bz = cz + pz * FACE_DIST * side;
+
+            // ── BODY ─────────────────────────────────────────────────────────
+            const wallColor = wallColors[Math.floor(Math.random() * wallColors.length)];
+            const bodyGeo = new THREE.BoxGeometry(BUILD_W, bHeight, BUILD_D);
+            const bodyMat = new THREE.MeshStandardMaterial({ color: wallColor, roughness: 0.75, metalness: 0.05 });
+            const bodyMesh = new THREE.Mesh(bodyGeo, bodyMat);
+            bodyMesh.rotation.y = angle;
+            bodyMesh.position.set(bx, bHeight / 2 - 0.5, bz);
+            bodyMesh.castShadow = true;
+            bodyMesh.receiveShadow = true;
+            this.buildingsGroup.add(bodyMesh);
+
+            // ── FLAT ROOF (parapet edge slightly wider than walls) ────────
+            const roofColor = roofColors[Math.floor(Math.random() * roofColors.length)];
+            const roofMat = new THREE.MeshStandardMaterial({ color: roofColor, roughness: 0.9 });
+            const roofGeo = new THREE.BoxGeometry(BUILD_W + 1.5, 1.2, BUILD_D + 1.5);
+            const roofMesh = new THREE.Mesh(roofGeo, roofMat);
+            roofMesh.rotation.y = angle;
+            roofMesh.position.set(bx, bHeight - 0.5 + 0.6, bz);
+            roofMesh.castShadow = true;
+            this.buildingsGroup.add(roofMesh);
+          }
+        }
       });
-      centerX /= building.nodes.length;
-      centerZ /= building.nodes.length;
-
-      const shape = new THREE.Shape();
-      building.nodes.forEach((node, i) => {
-        const p = this.latLonToWorld(node.lat, node.lon);
-        
-        // Scale down footprint even more (0.75x) to guarantee clearance
-        const relX = (p.x - centerX) * 0.75;
-        const relZ = (p.z - centerZ) * 0.75;
-        
-        if (i === 0) shape.moveTo(relX, -relZ);
-        else shape.lineTo(relX, -relZ);
-      });
-
-      // Even shorter buildings for better visibility
-      const height = 10 + Math.random() * 15; 
-      const extrudeSettings = {
-        steps: 1,
-        depth: height,
-        bevelEnabled: true,
-        bevelThickness: 0.3,
-        bevelSize: 0.3,
-        bevelOffset: 0,
-        bevelSegments: 1
-      };
-
-      const baseColor = buildingColors[Math.floor(Math.random() * buildingColors.length)];
-      const buildingMat = new THREE.MeshStandardMaterial({ 
-        color: baseColor, 
-        roughness: 0.8, 
-        metalness: 0.05 
-      });
-
-      const geo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-      const mesh = new THREE.Mesh(geo, buildingMat);
-      
-      mesh.rotation.x = -Math.PI / 2;
-      mesh.position.set(centerX, this.sidewalkHeight, centerZ);
-      
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      this.buildingsGroup.add(mesh);
-
-      // Dach
-      const roofColor = new THREE.Color(baseColor).multiplyScalar(0.7);
-      const roofMat = new THREE.MeshStandardMaterial({ color: roofColor, roughness: 0.9 });
-      const roofGeo = new THREE.ExtrudeGeometry(shape, { steps: 1, depth: 0.5, bevelEnabled: false });
-      const roofMesh = new THREE.Mesh(roofGeo, roofMat);
-      roofMesh.rotation.x = -Math.PI / 2;
-      roofMesh.position.set(centerX, this.sidewalkHeight + height + 0.02, centerZ);
-      roofMesh.castShadow = true;
-      this.buildingsGroup.add(roofMesh);
     });
   }
 
@@ -603,7 +617,7 @@ export class Renderer3D implements IRenderer {
 
     const trunkGeo = new THREE.CylinderGeometry(2, 3, 15, 6);
     const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5d4037 });
-    
+
     // Satteres Grün für Low-Poly Bäume
     const foliageGeo = new THREE.ConeGeometry(12, 25, 6);
     const foliageMat = new THREE.MeshStandardMaterial({ color: 0x4caf50, roughness: 0.6 });
@@ -675,7 +689,7 @@ export class Renderer3D implements IRenderer {
     // Update Pacman
     if (this.pacLatLng && this.pacMesh) {
       const pos = this.latLonToWorld(this.pacLatLng.lat, this.pacLatLng.lng);
-      
+
       // Blinking effect during respawn
       if (this.isRespawning) {
         this.pacMesh.visible = Math.floor(performance.now() / 150) % 2 === 0;
@@ -693,42 +707,72 @@ export class Renderer3D implements IRenderer {
         const mouthAngle = 0.4 * Math.PI * (0.5 + 0.5 * Math.sin(performance.now() * 0.015));
         upper.rotation.z = mouthAngle;
         lower.rotation.z = -mouthAngle;
-        
-        // Update jaws material based on power-up
+
+        // Swap jaw material on power-up change — never recreate per frame
         const state = this.engine.getState();
         const upperMesh = upper.children[0] as THREE.Mesh;
         const lowerMesh = lower.children[0] as THREE.Mesh;
-        if (state.powerUpActive) {
-          const t = (Math.sin(performance.now() / 120) + 1) / 2;
-          const r = Math.floor(t * 255);
-          upperMesh.material = new THREE.MeshStandardMaterial({ color: new THREE.Color(r/255, r/255, 0), emissive: 0xff00ff, emissiveIntensity: 0.5 });
-          lowerMesh.material = upperMesh.material;
-        } else {
-          upperMesh.material = new THREE.MeshStandardMaterial({ color: 0x141c28 });
+        if (state.powerUpActive !== this.jawPowerUpActive) {
+          this.jawPowerUpActive = state.powerUpActive;
+          if (state.powerUpActive) {
+            if (!this.jawMatPowerUp) {
+              this.jawMatPowerUp = new THREE.MeshStandardMaterial({
+                color: 0xffff00, emissive: 0xff00ff, emissiveIntensity: 0.5
+              });
+            }
+            upperMesh.material = this.jawMatPowerUp;
+          } else {
+            upperMesh.material = this.jawMatNormal;
+          }
           lowerMesh.material = upperMesh.material;
         }
       }
 
-      // Billboard Eye
-      const eye = this.pacMesh.getObjectByName('xEye') as THREE.Group;
-      if (eye) {
-        eye.lookAt(this.camera.position);
+      // Eyes are embedded in the mesh and rotate with it — no billboard needed.
+
+      // Move directional light with Pac-Man so shadow frustum always covers the visible area.
+      if (this.dirLight && this.pacMesh) {
+        const px = this.pacMesh.position.x;
+        const pz = this.pacMesh.position.z;
+        this.dirLight.position.set(px + 800, 1200, pz + 400);
+        this.dirLight.target.position.set(px, 0, pz);
+        this.dirLight.target.updateMatrixWorld();
+        this.dirLight.shadow.camera.updateProjectionMatrix();
       }
 
-      // Rotate Pacman to face movement direction
+      // Rotate Pacman to face movement direction.
+      // currentRotation is in screen-pixel space: 0=East, 90=South, -90=North, 180=West.
+      // In our 3D world: +x=East, +z=South.
+      // Three.js rotation.y: 0 → mouth(+X) faces East, π/2 → faces North(-Z), -π/2 → faces South(+Z).
+      // Correct mapping: rotation.y = -currentRotation_in_radians (no +π/2 offset).
       if (this.currentRotation !== undefined && !isNaN(this.currentRotation)) {
-        this.pacMesh.rotation.y = - (this.currentRotation * Math.PI) / 180 + Math.PI / 2;
+        this.pacMesh.rotation.y = -(this.currentRotation * Math.PI) / 180;
       }
 
-      // Center camera smoothly with orbital physics
+      // 3rd Person Follow Camera
       const tiltRad = (90 - this.camTilt) * Math.PI / 180;
-      const offsetX = this.camDistance * Math.sin(tiltRad) * Math.sin(this.camAngle);
+
+      // Auto-center camera horizontally if mouse is released (snaps back behind pacman)
+      if (!this.isPointerDown) {
+        this.camAngle *= 0.9; // Smoothly return to 0 (looking straight ahead)
+      }
+
+      // Calculate offset behind PacMan based on his current Y rotation plus user look-around offset.
+      // Pacman's local +X is his forward direction, so behind is local -X.
+      const heading = this.pacMesh.rotation.y + this.camAngle;
+
+      const groundDist = this.camDistance * Math.sin(tiltRad);
+      const offsetX = -groundDist * Math.cos(heading);
+      const offsetZ = groundDist * Math.sin(heading);
       const offsetY = this.camDistance * Math.cos(tiltRad);
-      const offsetZ = this.camDistance * Math.sin(tiltRad) * Math.cos(this.camAngle);
 
       const idealCamPos = pos.clone().add(new THREE.Vector3(offsetX, offsetY, offsetZ));
-      this.camera.position.lerp(idealCamPos, 0.1);
-      this.camera.lookAt(pos);
+
+      // Smoothly interpolate camera position to create a nice swinging effect behind Pac-Man
+      this.camera.position.lerp(idealCamPos, 0.15);
+
+      // Always look at Pac-Man (slightly above his origin so he stays centered)
+      this.camera.lookAt(pos.x, pos.y + 10, pos.z);
     }
 
     // Update Ghosts
@@ -741,7 +785,7 @@ export class Renderer3D implements IRenderer {
         group = new THREE.Group();
         const color = new THREE.Color(ghost.color);
         const gMat = new THREE.MeshStandardMaterial({ color, roughness: 0.2, metalness: 0.5 });
-        
+
         // Shape-specific geometry
         if (ghost.shape === 0) { // Dome
           const body = new THREE.Mesh(new THREE.CylinderGeometry(8, 8, 12, 16), gMat);
@@ -802,7 +846,7 @@ export class Renderer3D implements IRenderer {
         this.ghostGroup.add(group);
         this.ghostMeshes.set(ghost, group as any);
       }
-      
+
       // Update position and power-up color
       const gPos = this.latLonToWorld(ghost.lat, ghost.lon);
       group.position.x = gPos.x;
@@ -811,12 +855,12 @@ export class Renderer3D implements IRenderer {
       const state = this.engine.getState();
       const groupMesh = group.children[0] as THREE.Mesh; // Assume first child has main material
       if (state.powerUpActive) {
-          const remaining = state.powerUpEndTime - performance.now();
-          if (remaining < 3000 && Math.floor(performance.now() / 200) % 2 === 0) {
-            (groupMesh.material as THREE.MeshStandardMaterial).color.set('#ffffff');
-          } else {
-            (groupMesh.material as THREE.MeshStandardMaterial).color.set('#0000ff');
-          }
+        const remaining = state.powerUpEndTime - performance.now();
+        if (remaining < 3000 && Math.floor(performance.now() / 200) % 2 === 0) {
+          (groupMesh.material as THREE.MeshStandardMaterial).color.set('#ffffff');
+        } else {
+          (groupMesh.material as THREE.MeshStandardMaterial).color.set('#0000ff');
+        }
       } else {
         (groupMesh.material as THREE.MeshStandardMaterial).color.set(ghost.color);
       }

@@ -15,6 +15,10 @@ let userPos: [number, number] = [51.505, -0.09];
 let currentRotation = 0;
 let activeKey: 'ArrowUp'|'ArrowDown'|'ArrowLeft'|'ArrowRight' | null = null;
 let bufferedKey: 'ArrowUp'|'ArrowDown'|'ArrowLeft'|'ArrowRight' | null = null;
+const keysDown = new Set<string>();
+let joyKnobX = 0;
+let joyKnobY = 0;
+let joyMaxTravel = 1;
 let pacCurrentNodeId: string | null = null;
 let pacTargetNodeId: string | null = null;
 let pacProgress = 0;
@@ -432,6 +436,7 @@ function resetGameParams() {
   if (pacNode) {
     pacLatLng = L.latLng(pacNode.lat, pacNode.lon);
     map.setView([pacNode.lat, pacNode.lon], 19);
+    initPacmanRotation(pacNode.id);
   }
 
   updateHUD();
@@ -462,32 +467,33 @@ HUD.hudCitySelect.addEventListener('change', () => {
 });
 
 function triggerRespawn() {
-  isRespawning = true; // Set to true to trigger animation and stop game logic
+  isRespawning = true;
   lastFrameTime = 0;
-  activeKey = null;
-  bufferedKey = null;
-
   ghosts.length = 0;
+  rockets.length = 0;
   updateHUD();
 
   setTimeout(() => {
+    if (isGameOver) return;
+
+    // Full reset — runs right before gameplay resumes
     pacCurrentNodeId = engine.getInitialPacmanNodeId();
     pacTargetNodeId = null;
     pacProgress = 0;
+    activeKey = null;
+    bufferedKey = null;
+    keysDown.clear();
 
     const initNode = engine.getNodes().get(pacCurrentNodeId)!;
     engine.setPacmanPosition(pacCurrentNodeId);
     pacLatLng = L.latLng(initNode.lat, initNode.lon);
+    initPacmanRotation(pacCurrentNodeId); // sets currentRotation to face first neighbor
 
-    map.panTo([initNode.lat, initNode.lon], { animate: true, duration: 0.5 });
+    map.panTo([initNode.lat, initNode.lon], { animate: false });
 
-    setTimeout(() => {
-       if (!isGameOver) {
-         spawnGhosts();
-         isRespawning = false; // Respawn finished
-         lastFrameTime = performance.now();
-       }
-    }, 600);
+    spawnGhosts();
+    isRespawning = false;
+    lastFrameTime = performance.now();
   }, 2000);
 }
 
@@ -495,6 +501,21 @@ function updateHUD() {
   const state = engine.getState();
   HUD.score.innerText = state.score.toString().padStart(4, '0');
   HUD.lives.innerText = '\u2764'.repeat(state.lives);
+}
+
+function initPacmanRotation(nodeId: string) {
+  const node = engine.getNodes().get(nodeId);
+  if (!node || node.neighbors.length === 0) { currentRotation = 0; return; }
+  const nb = engine.getNodes().get(node.neighbors[0]);
+  if (!nb) { currentRotation = 0; return; }
+
+  // Use lat/lon directly — never NaN, no map.project() dependency.
+  // bestNeighborForHeading uses: geoAngleRad = (-headingDeg) * PI/180
+  // So screenAngle (currentRotation) = -geoAngle_in_degrees
+  const dLat = nb.lat - node.lat;
+  const dLon = nb.lon - node.lon;
+  const geoAngleDeg = Math.atan2(dLat, dLon) * 180 / Math.PI;
+  currentRotation = -geoAngleDeg; // screen-pixel convention: 0=East, -90=North, 90=South
 }
 
 function updatePacmanRotation(cId: string, tId: string) {
@@ -511,6 +532,9 @@ function updatePacmanRotation(cId: string, tId: string) {
   diff = ((diff % 360) + 540) % 360 - 180;
   currentRotation += diff;
 }
+
+// (getEffectiveKey removed — 3D movement now uses bestNeighborForHeading directly)
+
 
 function drawFrame() {
   if (!renderer) return;
@@ -529,6 +553,160 @@ function drawFrame() {
 
   renderer.drawFrame(performance.now());
 }
+// =============================================
+//  MOVEMENT — 2D (absolute map directions)
+// =============================================
+
+function updatePacman2D(dt: number) {
+  // 1. Start moving
+  if (!pacTargetNodeId && activeKey) {
+    pacTargetNodeId = engine.getNextNode(pacCurrentNodeId!, activeKey);
+    if (pacTargetNodeId) {
+      pacProgress = 0;
+      bufferedKey = null;
+      updatePacmanRotation(pacCurrentNodeId!, pacTargetNodeId);
+    }
+  }
+
+  // 2. Interpolate movement
+  if (pacTargetNodeId) {
+    // Reversal check
+    if (activeKey) {
+      const reverseTarget = engine.getNextNode(pacTargetNodeId, activeKey);
+      if (reverseTarget === pacCurrentNodeId) {
+        const temp = pacTargetNodeId;
+        pacTargetNodeId = pacCurrentNodeId!;
+        pacCurrentNodeId = temp;
+        pacProgress = 1 - pacProgress;
+        bufferedKey = null;
+        updatePacmanRotation(pacCurrentNodeId!, pacTargetNodeId);
+      } else if (activeKey !== bufferedKey) {
+        bufferedKey = activeKey;
+      }
+    }
+
+    if (activeKey || bufferedKey) {
+      const cNode = engine.getNodes().get(pacCurrentNodeId!)!;
+      const tNode = engine.getNodes().get(pacTargetNodeId)!;
+      const dist = map.distance([cNode.lat, cNode.lon], [tNode.lat, tNode.lon]);
+      pacProgress += dt / ((dist / pacSpeed) * 1000);
+
+      if (pacProgress >= 1) {
+        pacCurrentNodeId = pacTargetNodeId;
+        pacProgress = 1;
+        engine.setPacmanPosition(pacCurrentNodeId);
+        updateHUD();
+
+        const turnKey = bufferedKey || activeKey;
+        let nextNode: string | null = null;
+        if (turnKey) {
+          nextNode = engine.getNextNode(pacCurrentNodeId, turnKey);
+          if (nextNode) { activeKey = turnKey; bufferedKey = null; }
+        }
+        if (!nextNode && bufferedKey && activeKey) {
+          nextNode = engine.getNextNode(pacCurrentNodeId, activeKey);
+          bufferedKey = null;
+        }
+
+        pacTargetNodeId = nextNode;
+        if (pacTargetNodeId) {
+          pacProgress = 0;
+          updatePacmanRotation(pacCurrentNodeId, pacTargetNodeId);
+        }
+      }
+    }
+  }
+}
+
+// Returns the neighbor node ID whose geographic direction best matches the given
+// screen-space heading angle (0=East, -90=North, 90=South, 180=West).
+// Excludes `excludeId` to prevent reversals. Returns null if none within 90°.
+function bestNeighborForHeading(nodeId: string, headingDeg: number, excludeId: string | null): string | null {
+  const node = engine.getNodes().get(nodeId);
+  if (!node) return null;
+
+  // Convert screen-pixel heading to geographic angle:
+  // screen 0°=East,  90°=South (y↓) → geo 0°=East, -90°=South (lat↓)
+  // Flip sign of heading to go from screen-y to lat-y: geoAngle = -headingDeg
+  const geoAngleRad = (-headingDeg) * Math.PI / 180;
+
+  let bestId: string | null = null;
+  let bestDiff = Infinity;
+
+  node.neighbors.forEach(nbId => {
+    if (nbId === excludeId) return;
+    const nb = engine.getNodes().get(nbId);
+    if (!nb) return;
+    const dLat = nb.lat - node.lat;
+    const dLon = nb.lon - node.lon;
+    if (dLat === 0 && dLon === 0) return;
+
+    const nbAngleRad = Math.atan2(dLat, dLon); // geographic angle (atan2(lat, lon))
+    let diff = Math.abs(nbAngleRad - geoAngleRad);
+    if (diff > Math.PI) diff = 2 * Math.PI - diff;
+
+    if (diff < Math.PI / 2 && diff < bestDiff) { // within 90° cone
+      bestDiff = diff;
+      bestId = nbId;
+    }
+  });
+
+  return bestId;
+}
+
+// =============================================
+//  MOVEMENT — 3D (tank / ego-shooter steering)
+// =============================================
+
+function updatePacman3D(dt: number) {
+  const driveKey = activeKey; // 'ArrowUp', 'ArrowDown', or null
+
+  // heading: the current facing angle in screen-pixel-space degrees
+  // ArrowUp = drive forward (same heading), ArrowDown = drive backward (heading + 180°)
+  const forwardHeading = driveKey === 'ArrowDown'
+    ? ((currentRotation + 180) % 360)
+    : currentRotation;
+
+  // ── 1. Start a new segment ─────────────────────────────────────────────────
+  if (!pacTargetNodeId && driveKey && pacCurrentNodeId) {
+    const candidate = bestNeighborForHeading(pacCurrentNodeId, forwardHeading, null);
+    if (candidate) {
+      pacTargetNodeId = candidate;
+      pacProgress = 0;
+    }
+  }
+
+  // ── 2. Travel along current segment ──────────────────────────────────────
+  if (pacTargetNodeId) {
+    const cNode = engine.getNodes().get(pacCurrentNodeId!)!;
+    const tNode = engine.getNodes().get(pacTargetNodeId)!;
+    if (!cNode || !tNode) { pacTargetNodeId = null; return; }
+
+    const dist = map.distance([cNode.lat, cNode.lon], [tNode.lat, tNode.lon]);
+    const durationMs = (dist / pacSpeed) * 1000;
+    pacProgress += dt / durationMs;
+
+    if (pacProgress >= 1) {
+      const prevNodeId = pacCurrentNodeId!;
+      pacCurrentNodeId = pacTargetNodeId;
+      pacProgress = 0;
+      engine.setPacmanPosition(pacCurrentNodeId);
+      updateHUD();
+
+      if (driveKey) {
+        // Find the next neighbor in the current heading, but don't reverse
+        let nextNode = bestNeighborForHeading(pacCurrentNodeId, forwardHeading, prevNodeId);
+        // If nothing found without exclusion, allow any direction
+        if (!nextNode) nextNode = bestNeighborForHeading(pacCurrentNodeId, forwardHeading, null);
+        // Still don't reverse unless it's truly the only option
+        if (nextNode === prevNodeId) nextNode = null;
+        pacTargetNodeId = nextNode;
+      } else {
+        pacTargetNodeId = null;
+      }
+    }
+  }
+}
 
 // =============================================
 //  GAME LOOP
@@ -537,16 +715,38 @@ function drawFrame() {
 function gameLoop(time: number) {
   requestAnimationFrame(gameLoop);
 
-  drawFrame();
+  if (isGameOver || isRespawning) { drawFrame(); lastFrameTime = 0; return; }
+  if (!lastFrameTime) { lastFrameTime = time; drawFrame(); return; }
 
-  if (isGameOver || isRespawning) { lastFrameTime = 0; return; }
-
-  if (!lastFrameTime) { lastFrameTime = time; return; }
   const dt = time - lastFrameTime;
   lastFrameTime = time;
+
+
+  // ── 3D Tank Rotation ─────────────────────────────────────────────────────
+  // Must run BEFORE drawFrame so pacMesh sees the updated heading immediately.
+  if (currentTheme === '3d') {
+    const turnSpeed = 150 * (dt / 1000);
+
+    if (keysDown.has('ArrowLeft'))  currentRotation -= turnSpeed;
+    if (keysDown.has('ArrowRight')) currentRotation += turnSpeed;
+    if (Math.abs(joyKnobX) > 0.1 && joyMaxTravel > 0) currentRotation += (joyKnobX / joyMaxTravel) * turnSpeed;
+
+    if (isNaN(currentRotation)) currentRotation = 0; // NaN guard — prevents perpetual steering failure
+    currentRotation = ((currentRotation % 360) + 540) % 360 - 180;
+
+    // activeKey in 3D = gas pedal only
+    activeKey = null;
+    if (keysDown.has('ArrowUp')   || (joyMaxTravel > 0 && joyKnobY / joyMaxTravel < -0.3)) activeKey = 'ArrowUp';
+    if (keysDown.has('ArrowDown') || (joyMaxTravel > 0 && joyKnobY / joyMaxTravel > 0.3))  activeKey = 'ArrowDown';
+
+  }
+
+  drawFrame(); // render with latest rotation
+
+  // ── Shared bookkeeping ────────────────────────────────────────────────────
   const now = performance.now();
   engine.updatePowerUp(now);
-  
+
   const state = engine.getState();
   if (state.powerUpActive) {
     HUD.powerTimerContainer.classList.remove('hidden');
@@ -563,88 +763,28 @@ function gameLoop(time: number) {
     else return;
   }
 
-  // 1. Start moving
-  if (!pacTargetNodeId && activeKey) {
-    pacTargetNodeId = engine.getNextNode(pacCurrentNodeId, activeKey);
-    if (pacTargetNodeId) {
-       pacProgress = 0;
-       bufferedKey = null;
-       updatePacmanRotation(pacCurrentNodeId, pacTargetNodeId);
-    }
+  // ── Branch movement by mode ───────────────────────────────────────────────
+  if (currentTheme === '3d') {
+    updatePacman3D(dt);
+  } else {
+    updatePacman2D(dt);
   }
 
-  // 2. Interpolate movement
-  if (pacTargetNodeId) {
-    // Check for reversal (immediate U-turn)
-    if (activeKey) {
-      const idealNextFromTarget = engine.getNextNode(pacTargetNodeId, activeKey);
-      if (idealNextFromTarget === pacCurrentNodeId) {
-         const temp = pacTargetNodeId;
-         pacTargetNodeId = pacCurrentNodeId;
-         pacCurrentNodeId = temp;
-         pacProgress = 1 - pacProgress;
-         bufferedKey = null;
-         updatePacmanRotation(pacCurrentNodeId, pacTargetNodeId);
-      } else if (activeKey !== bufferedKey) {
-         // Buffer a different direction for the next intersection
-         bufferedKey = activeKey;
-      }
-    }
-
-    if (activeKey || bufferedKey) {
-       const cNode = engine.getNodes().get(pacCurrentNodeId)!;
-       const tNode = engine.getNodes().get(pacTargetNodeId)!;
-       const dist = map.distance([cNode.lat, cNode.lon], [tNode.lat, tNode.lon]);
-       const durationMs = (dist / pacSpeed) * 1000;
-
-       pacProgress += dt / durationMs;
-
-       if (pacProgress >= 1) {
-          pacProgress = 1;
-          pacCurrentNodeId = pacTargetNodeId;
-          engine.setPacmanPosition(pacCurrentNodeId);
-          updateHUD();
-
-          // Try buffered direction first, then active key
-          const turnKey = bufferedKey || activeKey;
-          let nextNode: string | null = null;
-          if (turnKey) {
-            nextNode = engine.getNextNode(pacCurrentNodeId, turnKey);
-            if (nextNode) {
-              activeKey = turnKey;
-              bufferedKey = null;
-            }
-          }
-          // If buffered key didn't work, try active key
-          if (!nextNode && bufferedKey && activeKey) {
-            nextNode = engine.getNextNode(pacCurrentNodeId, activeKey);
-            bufferedKey = null;
-          }
-
-          pacTargetNodeId = nextNode;
-          if (pacTargetNodeId) {
-             pacProgress = 0;
-             updatePacmanRotation(pacCurrentNodeId, pacTargetNodeId);
-          }
-       }
-    }
-  }
-
-  // Always keep pacLatLng up to date for the renderer
+  // ── Update pacLatLng for renderer ─────────────────────────────────────────
   if (pacCurrentNodeId) {
-    const cNodeFinal = engine.getNodes().get(pacCurrentNodeId)!;
-    const tNodeFinal = engine.getNodes().get(pacTargetNodeId || pacCurrentNodeId)!;
-
-    const refZoom = 20; 
-    const p1 = map.project([cNodeFinal.lat, cNodeFinal.lon], refZoom);
-    const p2 = map.project([tNodeFinal.lat, tNodeFinal.lon], refZoom);
-    const pxX = p1.x + (p2.x - p1.x) * pacProgress;
-    const pxY = p1.y + (p2.y - p1.y) * pacProgress;
-
-    if (!isNaN(pxX) && !isNaN(pxY)) {
-      pacLatLng = map.unproject([pxX, pxY], refZoom);
-      if (currentTheme !== '3d' && pacTargetNodeId) {
-        map.panInside(pacLatLng, { padding: [250, 250], animate: false });
+    const cNodeFinal = engine.getNodes().get(pacCurrentNodeId);
+    const tNodeFinal = engine.getNodes().get(pacTargetNodeId || pacCurrentNodeId);
+    if (cNodeFinal && tNodeFinal) {
+      const refZoom = 20;
+      const p1 = map.project([cNodeFinal.lat, cNodeFinal.lon], refZoom);
+      const p2 = map.project([tNodeFinal.lat, tNodeFinal.lon], refZoom);
+      const pxX = p1.x + (p2.x - p1.x) * pacProgress;
+      const pxY = p1.y + (p2.y - p1.y) * pacProgress;
+      if (!isNaN(pxX) && !isNaN(pxY)) {
+        pacLatLng = map.unproject([pxX, pxY], refZoom);
+        if (currentTheme !== '3d' && pacTargetNodeId) {
+          map.panInside(pacLatLng, { padding: [250, 250], animate: false });
+        }
       }
     }
   }
@@ -844,13 +984,15 @@ function setupInput() {
   window.addEventListener('keydown', (e) => {
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
       e.preventDefault();
+      keysDown.add(e.key);
       activeKey = e.key as any;
     }
   });
 
   window.addEventListener('keyup', (e) => {
+    keysDown.delete(e.key);
     if (e.key === activeKey) {
-      activeKey = null;
+      activeKey = Array.from(keysDown).pop() as any || null;
       bufferedKey = null;
     }
   });
@@ -885,6 +1027,7 @@ function setupInput() {
     const baseR = cx - 4;
     const knobR = baseR * 0.35;
     const maxTravel = baseR - knobR - 2;
+    joyMaxTravel = maxTravel;
     return { cx, cy, baseR, knobR, maxTravel };
   }
 
@@ -1086,6 +1229,8 @@ function setupInput() {
       knobX = 0;
       knobY = 0;
     }
+    joyKnobX = knobX;
+    joyKnobY = knobY;
 
     drawJoystick();
   }
