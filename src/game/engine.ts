@@ -7,6 +7,17 @@ export interface GameNode {
   neighbors: string[]; // Neighbor node IDs
 }
 
+export interface Building {
+  id: string;
+  nodes: { lat: number, lon: number }[];
+}
+
+export interface Tree {
+  id: string;
+  lat: number;
+  lon: number;
+}
+
 export interface GameState {
   score: number;
   lives: number;
@@ -20,6 +31,8 @@ export class GameEngine {
   private dots: Set<string> = new Set(); // Node IDs where dots are located
   private powerItems: Set<string> = new Set(); // Node IDs for code blocks
   private rocketItems: Set<string> = new Set(); // Node IDs for rocket items
+  private buildings: Building[] = [];
+  private trees: Tree[] = [];
   private pacmanNodeId: string = "";
   private initialPacmanNodeId: string = "";
   private state: GameState = { score: 0, lives: 3, isGameOver: false, powerUpActive: false, powerUpEndTime: 0 };
@@ -31,6 +44,8 @@ export class GameEngine {
     this.dots.clear();
     this.powerItems.clear();
     this.rocketItems.clear();
+    this.buildings = [];
+    this.trees = [];
 
     // 1. Collect all nodes from the ways we care about
     const wayElements = osmData.elements.filter((e: any) => e.type === 'way');
@@ -60,6 +75,27 @@ export class GameEngine {
           this.nodes.get(prevId)!.neighbors.push(nodeId);
         }
       }
+
+      // Collect buildings
+      if (way.tags && way.tags.building) {
+        const bNodes: {lat: number, lon: number}[] = [];
+        for (let i = 0; i < way.nodes.length; i++) {
+          const osmNode = nodeLookup.get(way.nodes[i]);
+          if (osmNode) {
+            bNodes.push({ lat: osmNode.lat, lon: osmNode.lon });
+          }
+        }
+        if (bNodes.length > 2) {
+          this.buildings.push({ id: way.id.toString(), nodes: bNodes });
+        }
+      }
+    });
+
+    // Collect trees
+    nodeElements.forEach((n: any) => {
+      if (n.tags && n.tags.natural === 'tree') {
+        this.trees.push({ id: n.id.toString(), lat: n.lat, lon: n.lon });
+      }
     });
 
     // 2. Initial dots and power items
@@ -85,7 +121,67 @@ export class GameEngine {
       this.rocketItems.add(id);
     }
     
+    // ✅ Keep only the largest connected component (remove isolated road islands)
+    this.keepLargestConnectedComponent();
+
     console.log(`Graph built with ${this.nodes.size} nodes, ${this.powerItems.size} power items, and ${this.rocketItems.size} rockets.`);
+  }
+
+  /**
+   * BFS to find all connected components, then discard everything
+   * except the largest one. This prevents isolated road islands.
+   */
+  private keepLargestConnectedComponent() {
+    const visited = new Set<string>();
+    const components: string[][] = [];
+
+    for (const id of this.nodes.keys()) {
+      if (visited.has(id)) continue;
+
+      // BFS from this node
+      const component: string[] = [];
+      const queue: string[] = [id];
+      visited.add(id);
+
+      while (queue.length > 0) {
+        const current = queue.shift()!;
+        component.push(current);
+        const node = this.nodes.get(current)!;
+        for (const neighborId of node.neighbors) {
+          if (!visited.has(neighborId) && this.nodes.has(neighborId)) {
+            visited.add(neighborId);
+            queue.push(neighborId);
+          }
+        }
+      }
+
+      components.push(component);
+    }
+
+    if (components.length <= 1) return; // Already fully connected
+
+    // Find largest component
+    let largest = components[0];
+    for (const comp of components) {
+      if (comp.length > largest.length) largest = comp;
+    }
+
+    const keepSet = new Set(largest);
+    const toRemove = Array.from(this.nodes.keys()).filter(id => !keepSet.has(id));
+
+    console.log(`Connectivity: ${components.length} components found. Keeping ${largest.length} nodes, removing ${toRemove.length}.`);
+
+    for (const id of toRemove) {
+      this.nodes.delete(id);
+      this.dots.delete(id);
+      this.powerItems.delete(id);
+      this.rocketItems.delete(id);
+    }
+
+    // Clean up dangling neighbor references
+    for (const node of this.nodes.values()) {
+      node.neighbors = node.neighbors.filter(nId => this.nodes.has(nId));
+    }
   }
 
   public resetGame() {
@@ -294,5 +390,13 @@ export class GameEngine {
 
   public getNodes() {
     return this.nodes;
+  }
+
+  public getBuildings() {
+    return this.buildings;
+  }
+
+  public getTrees() {
+    return this.trees;
   }
 }

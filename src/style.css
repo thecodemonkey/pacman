@@ -295,8 +295,8 @@ body {
 }
 
 .hud-select option {
-  background: #1a1a1a;
-  color: white;
+  background: #ffffff !important;
+  color: #000000 !important;
 }
 
 .select-wrapper::after {
