@@ -19,6 +19,8 @@ const keysDown = new Set<string>();
 let joyKnobX = 0;
 let joyKnobY = 0;
 let joyMaxTravel = 1;
+let camJoyX = 0;
+let camJoyY = 0;
 let pacCurrentNodeId: string | null = null;
 let pacTargetNodeId: string | null = null;
 let pacProgress = 0;
@@ -315,6 +317,21 @@ HUD.mode3DToggle.addEventListener('click', () => {
 
 // --- Overpass API ---
 async function fetchNearbyStreets(lat: number, lon: number, retries = 3) {
+  try {
+    // Attempt to load from static JSON cache first
+    const cacheUrl = `/cities/${lat}_${lon}.json`;
+    const cachedResponse = await fetch(cacheUrl);
+    if (cachedResponse.ok) {
+      console.log(`Loaded cached city data: ${cacheUrl}`);
+      const data = await cachedResponse.json();
+      processOSMData(data);
+      return;
+    }
+  } catch (e) {
+    // Ignore cache failure, proceed to live Overpass API
+    console.log(`No cache found for ${lat}, ${lon}, querying live Overpass API...`);
+  }
+
   const radius = 300;
   const query = `
     [out:json];
@@ -549,6 +566,8 @@ function drawFrame() {
      streetEdges,
      currentRotation,
      isRespawning,
+     camJoyX,
+     camJoyY
   });
 
   renderer.drawFrame(performance.now());
@@ -864,6 +883,7 @@ function gameLoop(time: number) {
     const durationMs = dist > 0 ? (dist / rocket.speed) * 1000 : 200;
     rocket.progress += dt / durationMs;
 
+    let spliced = false;
     while (rocket.progress >= 1) {
       rocket.progress -= 1;
       const prev = rocket.currentNodeId;
@@ -873,6 +893,7 @@ function gameLoop(time: number) {
       const node = engine.getNodes().get(rocket.currentNodeId);
       if (!node || node.neighbors.length === 0) {
         rockets.splice(i, 1);
+        spliced = true;
         break;
       }
 
@@ -907,17 +928,26 @@ function gameLoop(time: number) {
       rocket.targetNodeId = nextNodeId;
     }
 
+    if (spliced) continue;
+
     if (rockets[i]) {
        const rcNode = engine.getNodes().get(rocket.currentNodeId);
        const rtNode = engine.getNodes().get(rocket.targetNodeId);
        if (rcNode && rtNode) {
-         const rp1 = map.project([rcNode.lat, rcNode.lon], map.getMaxZoom());
-         const rp2 = map.project([rtNode.lat, rtNode.lon], map.getMaxZoom());
-         const rpxX = rp1.x + (rp2.x - rp1.x) * Math.min(Math.max(rocket.progress, 0), 1);
-         const rpxY = rp1.y + (rp2.y - rp1.y) * Math.min(Math.max(rocket.progress, 0), 1);
-         const rocketLatLng = map.unproject([rpxX, rpxY], map.getMaxZoom());
-         rocket.lat = rocketLatLng.lat;
-         rocket.lon = rocketLatLng.lng;
+         const refZoom = 20; // use same stable reference zoom for all entity physical movement projection interpolation to prevent jitter and maintain consistent math
+         const rp1 = map.project([rcNode.lat, rcNode.lon], refZoom);
+         const rp2 = map.project([rtNode.lat, rtNode.lon], refZoom);
+         let rProgress = rocket.progress;
+         if (isNaN(rProgress) || !isFinite(rProgress)) rProgress = 0; // Failsafe
+         
+         const rpxX = rp1.x + (rp2.x - rp1.x) * Math.min(Math.max(rProgress, 0), 1);
+         const rpxY = rp1.y + (rp2.y - rp1.y) * Math.min(Math.max(rProgress, 0), 1);
+         
+         if (!isNaN(rpxX) && !isNaN(rpxY)) {
+           const rocketLatLng = map.unproject([rpxX, rpxY], refZoom);
+           rocket.lat = rocketLatLng.lat;
+           rocket.lon = rocketLatLng.lng;
+         }
        }
     }
   }
@@ -997,234 +1027,196 @@ function setupInput() {
     }
   });
 
-  // --- Canvas Joystick ---
+  // --- Canvas Joysticks ---
   const joyCanvas = document.getElementById('joystick-canvas') as HTMLCanvasElement;
   const jCtx = joyCanvas.getContext('2d')!;
   let joystickActive = false;
-  const deadzone = 0.15; // fraction of baseRadius
 
-  // Target knob position (where input points)
-  let knobTargetX = 0;
-  let knobTargetY = 0;
-  // Current smooth knob position
-  let knobX = 0;
-  let knobY = 0;
+  const camJoyCanvas = document.getElementById('cam-joystick-canvas') as HTMLCanvasElement;
+  const cCtx = camJoyCanvas.getContext('2d')!;
+  let camJoystickActive = false;
+
+  const deadzone = 0.15;
+
+  let knobTargetX = 0; let knobTargetY = 0;
+  let camKnobTargetX = 0; let camKnobTargetY = 0;
+  
+  let knobX = 0; let knobY = 0;
+  let localCamKnobX = 0; let localCamKnobY = 0;
 
   function sizeJoystickCanvas() {
-    const rect = joyCanvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
-    joyCanvas.width = rect.width * dpr;
-    joyCanvas.height = rect.height * dpr;
-    jCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const rect = joyCanvas.getBoundingClientRect();
+    if (rect.width > 0) {
+      joyCanvas.width = rect.width * dpr;
+      joyCanvas.height = rect.height * dpr;
+      jCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      
+      camJoyCanvas.width = rect.width * dpr;
+      camJoyCanvas.height = rect.height * dpr;
+      cCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
   }
   sizeJoystickCanvas();
   window.addEventListener('resize', sizeJoystickCanvas);
 
-  function getJoySize() {
-    const rect = joyCanvas.getBoundingClientRect();
+  function getJoySize(canvas: HTMLCanvasElement) {
+    const rect = canvas.getBoundingClientRect();
     const cx = rect.width / 2;
     const cy = rect.height / 2;
     const baseR = cx - 4;
     const knobR = baseR * 0.35;
     const maxTravel = baseR - knobR - 2;
-    joyMaxTravel = maxTravel;
+    if (canvas === joyCanvas) joyMaxTravel = maxTravel;
     return { cx, cy, baseR, knobR, maxTravel };
   }
 
-  function drawArrow(ax: number, ay: number, angle: number, size: number, alpha: number) {
-    jCtx.save();
-    jCtx.translate(ax, ay);
-    jCtx.rotate(angle);
-    jCtx.beginPath();
-    jCtx.moveTo(0, -size);
-    jCtx.lineTo(-size * 0.6, size * 0.3);
-    jCtx.lineTo(size * 0.6, size * 0.3);
-    jCtx.closePath();
-    jCtx.fillStyle = `rgba(255, 210, 47, ${alpha})`;
-    jCtx.fill();
-    jCtx.restore();
-  }
-
-  function drawArrow3D(ax: number, ay: number, angle: number, size: number, alpha: number) {
-    jCtx.save();
-    jCtx.translate(ax, ay);
-    jCtx.rotate(angle);
-    jCtx.beginPath();
-    jCtx.moveTo(0, -size);
-    jCtx.lineTo(-size * 0.6, size * 0.3);
-    jCtx.lineTo(0, size * 0.1);
-    jCtx.lineTo(size * 0.6, size * 0.3);
-    jCtx.closePath();
-    jCtx.fillStyle = `rgba(0, 210, 255, ${alpha})`;
-    jCtx.shadowColor = `rgba(0, 210, 255, ${alpha * 0.8})`;
-    jCtx.shadowBlur = 6;
-    jCtx.fill();
-    jCtx.restore();
-  }
-
-  function drawIsometricHex(cx: number, cy: number, r: number) {
-    // Draw isometric "platform" using a squashed hexagon with 3 faces
-    const skewY = 0.5; // isometric compression
-
-    // Top face (lighter)
-    jCtx.beginPath();
-    for (let i = 0; i < 6; i++) {
-      const a = (i * Math.PI) / 3 - Math.PI / 6;
-      const px = cx + r * Math.cos(a);
-      const py = cy + r * Math.sin(a) * skewY;
-      i === 0 ? jCtx.moveTo(px, py) : jCtx.lineTo(px, py);
-    }
-    jCtx.closePath();
-    const faceGrad = jCtx.createRadialGradient(cx, cy - 4, 0, cx, cy, r);
-    faceGrad.addColorStop(0, 'rgba(0, 60, 80, 0.9)');
-    faceGrad.addColorStop(1, 'rgba(0, 20, 30, 0.85)');
-    jCtx.fillStyle = faceGrad;
-    jCtx.fill();
-
-    // Edge glow
-    jCtx.strokeStyle = 'rgba(0, 210, 255, 0.5)';
-    jCtx.lineWidth = 1.5;
-    jCtx.stroke();
-
-    // Inner ring glow
-    jCtx.beginPath();
-    jCtx.ellipse(cx, cy, r * 0.65, r * 0.65 * skewY, 0, 0, Math.PI * 2);
-    jCtx.strokeStyle = 'rgba(0, 255, 200, 0.15)';
-    jCtx.lineWidth = 1;
-    jCtx.stroke();
+  function drawArrow(ctx: CanvasRenderingContext2D, ax: number, ay: number, angle: number, size: number, alpha: number, colorRGB: string) {
+    ctx.save();
+    ctx.translate(ax, ay);
+    ctx.rotate(angle);
+    ctx.beginPath();
+    ctx.moveTo(0, -size);
+    ctx.lineTo(-size * 0.6, size * 0.3);
+    ctx.lineTo(size * 0.6, size * 0.3);
+    ctx.closePath();
+    ctx.fillStyle = `rgba(${colorRGB}, ${alpha})`;
+    ctx.fill();
+    ctx.restore();
   }
 
   function drawJoystick() {
     const rect = joyCanvas.getBoundingClientRect();
+    if (rect.width === 0) return;
     const w = rect.width;
     const h = rect.height;
-    const { cx, cy, baseR, knobR } = getJoySize();
+    const { cx, cy, baseR, knobR } = getJoySize(joyCanvas);
 
     jCtx.clearRect(0, 0, w, h);
 
-    const is3DMode = currentTheme === '3d';
+    jCtx.beginPath();
+    jCtx.arc(cx, cy, baseR, 0, Math.PI * 2);
+    jCtx.fillStyle = 'rgba(20, 20, 30, 0.85)';
+    jCtx.fill();
+    jCtx.strokeStyle = 'rgba(255, 210, 47, 0.35)';
+    jCtx.lineWidth = 2;
+    jCtx.stroke();
 
-    if (is3DMode) {
-      // === 3D Isometric Joystick ===
-      drawIsometricHex(cx, cy, baseR);
+    const arrowDist = baseR * 0.72;
+    const mainSize = baseR * 0.14;
+    const diagSize = baseR * 0.09;
+    const arrowColor = '255, 210, 47';
+    drawArrow(jCtx, cx, cy - arrowDist, 0, mainSize, 0.3, arrowColor);
+    drawArrow(jCtx, cx + arrowDist, cy, Math.PI / 2, mainSize, 0.3, arrowColor);
+    drawArrow(jCtx, cx, cy + arrowDist, Math.PI, mainSize, 0.3, arrowColor);
+    drawArrow(jCtx, cx - arrowDist, cy, -Math.PI / 2, mainSize, 0.3, arrowColor);
+    const diagDist = arrowDist * 0.9;
+    const d = diagDist * 0.707;
+    drawArrow(jCtx, cx + d, cy - d, Math.PI / 4, diagSize, 0.15, arrowColor);
+    drawArrow(jCtx, cx + d, cy + d, Math.PI * 3 / 4, diagSize, 0.15, arrowColor);
+    drawArrow(jCtx, cx - d, cy + d, -Math.PI * 3 / 4, diagSize, 0.15, arrowColor);
+    drawArrow(jCtx, cx - d, cy - d, -Math.PI / 4, diagSize, 0.15, arrowColor);
 
-      // Cardinal 3D arrows
-      const arrowDist = baseR * 0.7;
-      const mainSize = baseR * 0.13;
-      const diagSize = baseR * 0.08;
-      const mainAlpha = 0.45;
-      const diagAlpha = 0.2;
-      drawArrow3D(cx, cy - arrowDist, 0, mainSize, mainAlpha);
-      drawArrow3D(cx + arrowDist, cy, Math.PI / 2, mainSize, mainAlpha);
-      drawArrow3D(cx, cy + arrowDist, Math.PI, mainSize, mainAlpha);
-      drawArrow3D(cx - arrowDist, cy, -Math.PI / 2, mainSize, mainAlpha);
-      const d3 = arrowDist * 0.65;
-      drawArrow3D(cx + d3, cy - d3, Math.PI / 4, diagSize, diagAlpha);
-      drawArrow3D(cx + d3, cy + d3, Math.PI * 3 / 4, diagSize, diagAlpha);
-      drawArrow3D(cx - d3, cy + d3, -Math.PI * 3 / 4, diagSize, diagAlpha);
-      drawArrow3D(cx - d3, cy - d3, -Math.PI / 4, diagSize, diagAlpha);
+    const kx = cx + knobX;
+    const ky = cy + knobY;
+    jCtx.beginPath();
+    jCtx.arc(kx, ky, knobR + 4, 0, Math.PI * 2);
+    jCtx.fillStyle = joystickActive
+      ? 'rgba(255, 210, 47, 0.15)'
+      : 'rgba(255, 210, 47, 0.05)';
+    jCtx.fill();
 
-      // 3D Knob
-      const kx = cx + knobX;
-      const ky = cy + knobY;
+    const knobGrad = jCtx.createRadialGradient(kx - knobR * 0.25, ky - knobR * 0.25, 0, kx, ky, knobR);
+    knobGrad.addColorStop(0, 'rgba(255, 225, 80, 0.85)');
+    knobGrad.addColorStop(1, 'rgba(255, 190, 30, 0.65)');
+    jCtx.beginPath();
+    jCtx.arc(kx, ky, knobR, 0, Math.PI * 2);
+    jCtx.fillStyle = knobGrad;
+    jCtx.fill();
+    jCtx.strokeStyle = 'rgba(255, 210, 47, 0.8)';
+    jCtx.lineWidth = 2;
+    jCtx.stroke();
 
-      // Shadow below knob
-      jCtx.beginPath();
-      jCtx.ellipse(kx, ky + knobR * 0.4, knobR * 0.9, knobR * 0.3, 0, 0, Math.PI * 2);
-      jCtx.fillStyle = 'rgba(0, 0, 0, 0.4)';
-      jCtx.fill();
-
-      // Outer glow
-      jCtx.beginPath();
-      jCtx.arc(kx, ky, knobR + 5, 0, Math.PI * 2);
-      jCtx.fillStyle = joystickActive
-        ? 'rgba(0, 210, 255, 0.2)'
-        : 'rgba(0, 210, 255, 0.06)';
-      jCtx.fill();
-
-      // Knob sphere gradient (3D look)
-      const knobGrad3 = jCtx.createRadialGradient(kx - knobR * 0.3, ky - knobR * 0.35, knobR * 0.05, kx, ky, knobR);
-      knobGrad3.addColorStop(0, 'rgba(180, 240, 255, 0.95)');
-      knobGrad3.addColorStop(0.4, 'rgba(0, 180, 220, 0.85)');
-      knobGrad3.addColorStop(1, 'rgba(0, 80, 120, 0.9)');
-      jCtx.beginPath();
-      jCtx.arc(kx, ky, knobR, 0, Math.PI * 2);
-      jCtx.fillStyle = knobGrad3;
-      jCtx.shadowColor = 'rgba(0, 210, 255, 0.7)';
-      jCtx.shadowBlur = joystickActive ? 12 : 6;
-      jCtx.fill();
-      jCtx.shadowBlur = 0;
-      jCtx.strokeStyle = 'rgba(0, 230, 255, 0.9)';
-      jCtx.lineWidth = 1.5;
-      jCtx.stroke();
-
-      // Specular highlight
-      jCtx.beginPath();
-      jCtx.arc(kx - knobR * 0.25, ky - knobR * 0.3, knobR * 0.3, 0, Math.PI * 2);
-      jCtx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-      jCtx.fill();
-
-    } else {
-      // === Standard 2D Joystick ===
-      jCtx.beginPath();
-      jCtx.arc(cx, cy, baseR, 0, Math.PI * 2);
-      jCtx.fillStyle = 'rgba(20, 20, 30, 0.85)';
-      jCtx.fill();
-      jCtx.strokeStyle = 'rgba(255, 210, 47, 0.35)';
-      jCtx.lineWidth = 2;
-      jCtx.stroke();
-
-      const arrowDist = baseR * 0.72;
-      const mainSize = baseR * 0.14;
-      const diagSize = baseR * 0.09;
-      drawArrow(cx, cy - arrowDist, 0, mainSize, 0.3);
-      drawArrow(cx + arrowDist, cy, Math.PI / 2, mainSize, 0.3);
-      drawArrow(cx, cy + arrowDist, Math.PI, mainSize, 0.3);
-      drawArrow(cx - arrowDist, cy, -Math.PI / 2, mainSize, 0.3);
-      const diagDist = arrowDist * 0.9;
-      const d = diagDist * 0.707;
-      drawArrow(cx + d, cy - d, Math.PI / 4, diagSize, 0.15);
-      drawArrow(cx + d, cy + d, Math.PI * 3 / 4, diagSize, 0.15);
-      drawArrow(cx - d, cy + d, -Math.PI * 3 / 4, diagSize, 0.15);
-      drawArrow(cx - d, cy - d, -Math.PI / 4, diagSize, 0.15);
-
-      const kx = cx + knobX;
-      const ky = cy + knobY;
-      jCtx.beginPath();
-      jCtx.arc(kx, ky, knobR + 4, 0, Math.PI * 2);
-      jCtx.fillStyle = joystickActive
-        ? 'rgba(255, 210, 47, 0.15)'
-        : 'rgba(255, 210, 47, 0.05)';
-      jCtx.fill();
-
-      const knobGrad = jCtx.createRadialGradient(kx - knobR * 0.25, ky - knobR * 0.25, 0, kx, ky, knobR);
-      knobGrad.addColorStop(0, 'rgba(255, 225, 80, 0.85)');
-      knobGrad.addColorStop(1, 'rgba(255, 190, 30, 0.65)');
-      jCtx.beginPath();
-      jCtx.arc(kx, ky, knobR, 0, Math.PI * 2);
-      jCtx.fillStyle = knobGrad;
-      jCtx.fill();
-      jCtx.strokeStyle = 'rgba(255, 210, 47, 0.8)';
-      jCtx.lineWidth = 2;
-      jCtx.stroke();
-
-      jCtx.beginPath();
-      jCtx.arc(kx - knobR * 0.2, ky - knobR * 0.2, knobR * 0.35, 0, Math.PI * 2);
-      jCtx.fillStyle = 'rgba(255, 255, 255, 0.25)';
-      jCtx.fill();
-    }
+    jCtx.beginPath();
+    jCtx.arc(kx - knobR * 0.2, ky - knobR * 0.2, knobR * 0.35, 0, Math.PI * 2);
+    jCtx.fillStyle = 'rgba(255, 255, 255, 0.25)';
+    jCtx.fill();
   }
 
-  // Smooth animation loop for joystick
+  function drawCamJoystick() {
+    if (currentTheme !== '3d') return;
+    // Always use joyCanvas for dimensions to avoid display:none zero-width issues!
+    const rect = joyCanvas.getBoundingClientRect();
+    if (rect.width === 0) return;
+    const w = rect.width;
+    const h = rect.height;
+    const { cx, cy, baseR } = getJoySize(joyCanvas);
+
+    cCtx.clearRect(0, 0, w, h);
+
+    const maxT = baseR - (baseR * 0.35) - 2;
+    const nx = maxT ? localCamKnobX / maxT : 0;
+    const ny = maxT ? localCamKnobY / maxT : 0;
+
+    cCtx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+    cCtx.lineWidth = 1.5;
+    if (camJoystickActive) {
+       cCtx.strokeStyle = 'rgba(0, 210, 255, 0.9)';
+       cCtx.shadowColor = 'rgba(0, 210, 255, 0.6)';
+       cCtx.shadowBlur = 8;
+    } else {
+       cCtx.shadowBlur = 0;
+    }
+
+    // Outer globe circle
+    cCtx.beginPath();
+    cCtx.arc(cx, cy, baseR, 0, Math.PI * 2);
+    cCtx.fillStyle = 'rgba(20, 20, 30, 0.6)';
+    cCtx.fill();
+    cCtx.stroke();
+    
+    // Latitude/Longitude dynamic ellipses (Globe wireframe)
+    const tiltY = (ny - 0.15) * baseR; 
+    cCtx.beginPath();
+    cCtx.ellipse(cx, cy, baseR, Math.max(0.1, Math.abs(tiltY)), 0, 0, Math.PI*2);
+    cCtx.stroke();
+    
+    const panX = nx * baseR;
+    cCtx.beginPath();
+    cCtx.ellipse(cx, cy, Math.max(0.1, Math.abs(panX)), baseR, 0, 0, Math.PI*2);
+    cCtx.stroke();
+
+    // 360 text
+    cCtx.shadowBlur = 0;
+    cCtx.font = 'bold 16px sans-serif';
+    cCtx.textAlign = 'center';
+    cCtx.textBaseline = 'middle';
+    cCtx.fillStyle = camJoystickActive ? 'rgba(0, 210, 255, 1)' : 'rgba(255, 255, 255, 0.8)';
+    cCtx.fillText('360°', cx + localCamKnobX, cy + localCamKnobY);
+    
+    // Draw directional arrows only when moving
+    const arrowDist = baseR * 0.75;
+    const mainSize = baseR * 0.11; // smaller arrows
+
+    const movingLeft = localCamKnobX < -4;
+    const movingRight = localCamKnobX > 4;
+    const movingUp = localCamKnobY < -4;
+    const movingDown = localCamKnobY > 4;
+    
+    const camArrowCol = '0, 210, 255';
+    if (movingUp) drawArrow(cCtx, cx, cy - arrowDist, 0, mainSize, 0.8, camArrowCol);
+    if (movingRight) drawArrow(cCtx, cx + arrowDist, cy, Math.PI / 2, mainSize, 0.8, camArrowCol);
+    if (movingDown) drawArrow(cCtx, cx, cy + arrowDist, Math.PI, mainSize, 0.8, camArrowCol);
+    if (movingLeft) drawArrow(cCtx, cx - arrowDist, cy, -Math.PI / 2, mainSize, 0.8, camArrowCol);
+  }
+
   function joystickLoop() {
     requestAnimationFrame(joystickLoop);
 
-    // Smooth lerp towards target
     const lerp = joystickActive ? 0.3 : 0.15;
     knobX += (knobTargetX - knobX) * lerp;
     knobY += (knobTargetY - knobY) * lerp;
 
-    // Snap to zero when close enough
     if (!joystickActive && Math.abs(knobX) < 0.5 && Math.abs(knobY) < 0.5) {
       knobX = 0;
       knobY = 0;
@@ -1232,13 +1224,26 @@ function setupInput() {
     joyKnobX = knobX;
     joyKnobY = knobY;
 
+    const camLerp = camJoystickActive ? 0.3 : 0.15;
+    localCamKnobX += (camKnobTargetX - localCamKnobX) * camLerp;
+    localCamKnobY += (camKnobTargetY - localCamKnobY) * camLerp;
+
+    if (!camJoystickActive && Math.abs(localCamKnobX) < 0.5 && Math.abs(localCamKnobY) < 0.5) {
+      localCamKnobX = 0; localCamKnobY = 0;
+    }
+    
+    const { maxTravel: camMaxTravel } = getJoySize(camJoyCanvas);
+    camJoyX = camMaxTravel ? localCamKnobX / camMaxTravel : 0;
+    camJoyY = camMaxTravel ? localCamKnobY / camMaxTravel : 0;
+
     drawJoystick();
+    drawCamJoystick();
   }
   requestAnimationFrame(joystickLoop);
 
-  function handleInput(clientX: number, clientY: number) {
-    const rect = joyCanvas.getBoundingClientRect();
-    const { cx, cy, maxTravel, baseR } = getJoySize();
+  function handleInput(clientX: number, clientY: number, canvas: HTMLCanvasElement, setTarget: (dx:number, dy:number)=>void) {
+    const rect = canvas.getBoundingClientRect();
+    const { cx, cy, maxTravel, baseR } = getJoySize(canvas);
     let dx = (clientX - rect.left) - cx;
     let dy = (clientY - rect.top) - cy;
     const dist = Math.sqrt(dx * dx + dy * dy);
@@ -1248,69 +1253,80 @@ function setupInput() {
       dy = (dy / dist) * maxTravel;
     }
 
-    knobTargetX = dx;
-    knobTargetY = dy;
+    setTarget(dx, dy);
 
-    // Direction from deadzone
-    const normalizedDist = dist / baseR;
-    if (normalizedDist > deadzone) {
-      if (Math.abs(dx) > Math.abs(dy)) {
-        activeKey = dx > 0 ? 'ArrowRight' : 'ArrowLeft';
+    if (canvas === joyCanvas) {
+      const normalizedDist = dist / baseR;
+      if (normalizedDist > deadzone) {
+        if (Math.abs(dx) > Math.abs(dy)) {
+          activeKey = dx > 0 ? 'ArrowRight' : 'ArrowLeft';
+        } else {
+          activeKey = dy > 0 ? 'ArrowDown' : 'ArrowUp';
+        }
       } else {
-        activeKey = dy > 0 ? 'ArrowDown' : 'ArrowUp';
+        activeKey = null;
+        bufferedKey = null;
       }
-    } else {
-      activeKey = null;
-      bufferedKey = null;
     }
   }
 
-  function resetJoystick() {
-    joystickActive = false;
-    knobTargetX = 0;
-    knobTargetY = 0;
-    activeKey = null;
-    bufferedKey = null;
-  }
-
-  // Mouse events
+  // --- Mouse Events ---
   joyCanvas.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    joystickActive = true;
-    handleInput(e.clientX, e.clientY);
+    e.preventDefault(); joystickActive = true;
+    handleInput(e.clientX, e.clientY, joyCanvas, (dx, dy) => { knobTargetX = dx; knobTargetY = dy; });
+  });
+
+  camJoyCanvas.addEventListener('mousedown', (e) => {
+    e.preventDefault(); camJoystickActive = true;
+    handleInput(e.clientX, e.clientY, camJoyCanvas, (dx, dy) => { camKnobTargetX = dx; camKnobTargetY = dy; });
   });
 
   window.addEventListener('mousemove', (e) => {
-    if (!joystickActive) return;
-    e.preventDefault();
-    handleInput(e.clientX, e.clientY);
+    if (joystickActive) {
+      handleInput(e.clientX, e.clientY, joyCanvas, (dx, dy) => { knobTargetX = dx; knobTargetY = dy; });
+    }
+    if (camJoystickActive) {
+      handleInput(e.clientX, e.clientY, camJoyCanvas, (dx, dy) => { camKnobTargetX = dx; camKnobTargetY = dy; });
+    }
   });
 
   window.addEventListener('mouseup', () => {
-    if (joystickActive) resetJoystick();
+    if (joystickActive) {
+      joystickActive = false; knobTargetX = 0; knobTargetY = 0; activeKey = null; bufferedKey = null;
+    }
+    if (camJoystickActive) {
+      camJoystickActive = false; camKnobTargetX = 0; camKnobTargetY = 0;
+    }
   });
 
-  // Touch events
-  joyCanvas.addEventListener('touchstart', (e) => {
-    e.preventDefault();
-    joystickActive = true;
-    handleInput(e.touches[0].clientX, e.touches[0].clientY);
-  }, { passive: false });
+  // --- Touch Events ---
+  function setupTouchEvents(canvas: HTMLCanvasElement, getActive: ()=>boolean, setActive: (a:boolean)=>void, setTarget: (dx:number, dy:number)=>void) {
+    canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault(); setActive(true);
+      const touch = Array.from(e.touches).find(t => t.target === canvas) || e.touches[0];
+      handleInput(touch.clientX, touch.clientY, canvas, setTarget);
+    }, { passive: false });
 
-  joyCanvas.addEventListener('touchmove', (e) => {
-    if (!joystickActive) return;
-    e.preventDefault();
-    handleInput(e.touches[0].clientX, e.touches[0].clientY);
-  }, { passive: false });
+    canvas.addEventListener('touchmove', (e) => {
+      if (!getActive()) return;
+      e.preventDefault();
+      const touch = Array.from(e.touches).find(t => t.target === canvas) || e.touches[0];
+      handleInput(touch.clientX, touch.clientY, canvas, setTarget);
+    }, { passive: false });
 
-  joyCanvas.addEventListener('touchend', (e) => {
-    e.preventDefault();
-    resetJoystick();
-  }, { passive: false });
+    canvas.addEventListener('touchend', (e) => {
+      e.preventDefault(); setActive(false); setTarget(0, 0);
+      if (canvas === joyCanvas) { activeKey = null; bufferedKey = null; }
+    }, { passive: false });
 
-  joyCanvas.addEventListener('touchcancel', () => {
-    resetJoystick();
-  });
+    canvas.addEventListener('touchcancel', () => {
+      setActive(false); setTarget(0, 0);
+      if (canvas === joyCanvas) { activeKey = null; bufferedKey = null; }
+    });
+  }
+
+  setupTouchEvents(joyCanvas, () => joystickActive, (a) => joystickActive = a, (dx, dy) => { knobTargetX = dx; knobTargetY = dy; });
+  setupTouchEvents(camJoyCanvas, () => camJoystickActive, (a) => camJoystickActive = a, (dx, dy) => { camKnobTargetX = dx; camKnobTargetY = dy; });
 
   requestAnimationFrame(gameLoop);
 }
