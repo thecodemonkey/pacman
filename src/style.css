@@ -20,6 +20,7 @@ html {
   position: fixed;
   width: 100%;
   height: 100%;
+  touch-action: none;
 }
 
 body {
@@ -30,6 +31,7 @@ body {
   height: 100%;
   overflow: hidden;
   overscroll-behavior: none;
+  touch-action: none;
 }
 
 #app {
@@ -37,6 +39,7 @@ body {
   height: 100dvh;
   position: relative;
   overflow: hidden;
+  touch-action: none;
 }
 
 #map {
@@ -44,6 +47,7 @@ body {
   height: 100%;
   background: #000;
   outline: none;
+  touch-action: none;
 }
 
 #game-canvas {
@@ -54,6 +58,7 @@ body {
   height: 100%;
   pointer-events: none;
   z-index: 500;
+  touch-action: none;
 }
 
 .theme-pacman .leaflet-tile-pane {
@@ -505,6 +510,24 @@ body {
   max-width: calc(50vw - 40px);
 }
 
+#cam-joystick-canvas {
+  position: absolute;
+  bottom: 20px;
+  left: 20px;  /* Left aligned */
+  z-index: 2000;
+  touch-action: none;
+  width: 120px;
+  height: 120px;
+  cursor: pointer;
+  max-height: calc(50vh - 40px);
+  max-width: calc(50vw - 40px);
+  display: none; /* hidden by default */
+}
+
+.theme-3d #cam-joystick-canvas {
+  display: block; /* visible only in 3D */
+}
+
 /* Mobile Adjustments */
 @media (max-width: 768px) {
   #hud {
@@ -559,5 +582,12 @@ body {
     height: 130px;
     bottom: env(safe-area-inset-bottom, 15px);
     right: 15px;
+  }
+
+  #cam-joystick-canvas {
+    width: 130px;
+    height: 130px;
+    bottom: env(safe-area-inset-bottom, 15px);
+    left: 15px;
   }
 }

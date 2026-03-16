@@ -37,6 +37,8 @@ export class Renderer2D implements IRenderer {
     streetEdges?: Array<{ aLat: number; aLon: number; bLat: number; bLon: number }>,
     currentRotation?: number;
     isRespawning?: boolean;
+    camJoyX?: number;
+    camJoyY?: number;
   }) {
     this.pacLatLng = state.pacLatLng;
     this.ghosts = state.ghosts;
@@ -71,6 +73,7 @@ export class Renderer2D implements IRenderer {
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
     this.drawStreets();
+    this.drawHomebase(_now);
     this.drawDots();
     this.drawPowerItems();
     this.drawRocketItems();
@@ -241,6 +244,69 @@ export class Renderer2D implements IRenderer {
       ctx.globalAlpha = 1;
       ctx.fillText(hash % 2 === 0 ? '0' : '1', px, py + 1);
     }
+    ctx.restore();
+  }
+
+  private drawHomebase(now: number) {
+    const homeNodeId = this.engine.getInitialPacmanNodeId();
+    if (!homeNodeId) return;
+    const node = this.engine.getNodes().get(homeNodeId);
+    if (!node) return;
+
+    const p = this.toPoint(node.lat, node.lon);
+    const ctx = this.ctx;
+
+    // Pacman radius is 22, homebase should be ca. 2x
+    const baseRadius = 48;
+
+    ctx.save();
+
+    // 1. Pulsating Main Circle
+    const pulse = Math.sin(now / 400) * 0.05 + 1; // Slight pulse 0.95 to 1.05
+    const r = baseRadius * pulse;
+
+    // Main pink fill (0.3 opacity as requested)
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 0, 255, 0.3)';
+    ctx.fill();
+
+    // Small solid blue center circle
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#0050ff';
+    ctx.fill();
+
+    // Cyan border (1px, more opaque as requested)
+    ctx.strokeStyle = 'rgba(0, 255, 255, 0.8)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // 2. Wave-like glow impulses moving outwards
+    const waveCycle = 2000;
+    const numWaves = 3;
+
+    for (let i = 0; i < numWaves; i++) {
+      const offset = (i / numWaves) * waveCycle;
+      const progress = ((now + offset) % waveCycle) / waveCycle;
+
+      const waveRadius = r + (progress * baseRadius * 0.7);
+      const alpha = (1 - progress) * 0.6; // Increased alpha for waves
+
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, waveRadius, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(0, 255, 255, ${alpha})`;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
+    // Subtle central glow to make it feel more "alive"
+    const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+    grad.addColorStop(0, 'rgba(0, 255, 255, 0.15)');
+    grad.addColorStop(1, 'rgba(0, 255, 255, 0)');
+    ctx.fillStyle = grad;
+    ctx.fill();
+
     ctx.restore();
   }
 
@@ -623,10 +689,10 @@ export class Renderer2D implements IRenderer {
     ctx.beginPath();
     ctx.moveTo(teethStart, 0);
     for (let i = 0; i < teethCount; i++) {
-        const x1 = teethStart + i * teethStep + teethStep * 0.5;
-        const x2 = teethStart + (i + 1) * teethStep;
-        ctx.lineTo(x1, -5);
-        ctx.lineTo(x2, 0);
+      const x1 = teethStart + i * teethStep + teethStep * 0.5;
+      const x2 = teethStart + (i + 1) * teethStep;
+      ctx.lineTo(x1, -5);
+      ctx.lineTo(x2, 0);
     }
     ctx.fillStyle = 'white';
     ctx.globalAlpha = 0.9;

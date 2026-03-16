@@ -318,7 +318,7 @@ HUD.mode3DToggle.addEventListener('click', () => {
 // --- Overpass API ---
 async function fetchNearbyStreets(lat: number, lon: number, retries = 3) {
   try {
-    // Attempt to load from static JSON cache first
+    // 1. Attempt to load from static JSON cache first (for preset cities)
     const cacheUrl = `/cities/${lat}_${lon}.json`;
     const cachedResponse = await fetch(cacheUrl);
     if (cachedResponse.ok) {
@@ -328,10 +328,33 @@ async function fetchNearbyStreets(lat: number, lon: number, retries = 3) {
       return;
     }
   } catch (e) {
-    // Ignore cache failure, proceed to live Overpass API
-    console.log(`No cache found for ${lat}, ${lon}, querying live Overpass API...`);
+    console.log(`No static cache found for ${lat}, ${lon}.`);
   }
 
+  // 2. Attempt to load from dynamic local storage cache (for GPS / user location)
+  try {
+    const localCacheStr = localStorage.getItem('osm_local_cache');
+    if (localCacheStr) {
+      const localCache = JSON.parse(localCacheStr);
+      if (localCache.lat && localCache.lon && localCache.data) {
+        // Calculate distance between required position and cached position
+        const dist = map.distance([lat, lon], [localCache.lat, localCache.lon]);
+        if (dist <= 5000) { // Tolerate up to ~5km difference
+          console.log(`Loaded OSM data from localStorage cache (dist: ${Math.round(dist)}m)`);
+          processOSMData(localCache.data);
+          return;
+        } else {
+          console.log(`localStorage cache out of bounds (${Math.round(dist)}m > 5000m). Ignoring.`);
+        }
+      }
+    }
+  } catch(e) {
+    console.warn("Error reading localStorage cache", e);
+  }
+
+  console.log(`Querying live Overpass API for ${lat}, ${lon}...`);
+
+  // 3. Last fallback: live Overpass API
   const radius = 300;
   const query = `
     [out:json];
@@ -350,6 +373,16 @@ async function fetchNearbyStreets(lat: number, lon: number, retries = 3) {
     const response = await fetch(url);
     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
     const data = await response.json();
+
+    // Cache successful fetch to local storage
+    try {
+      localStorage.setItem('osm_local_cache', JSON.stringify({
+        lat, lon, data
+      }));
+    } catch (e) {
+      console.warn("Could not write to localStorage cache (data might be too large)", e);
+    }
+
     processOSMData(data);
   } catch (error) {
     console.error("Error fetching OSM data:", error);

@@ -13,6 +13,7 @@ export class Renderer3D implements IRenderer {
   private pacLatLng: L.LatLng | null = null;
   private ghosts: any[] = [];
   private rockets: any[] = [];
+  private smokeTrail: THREE.Mesh[] = [];
   private sparks: any[] = [];
   private fireParticles: any[] = [];
   private currentTheme: 'street' | 'pacman' | 'satellite' = 'street';
@@ -32,6 +33,7 @@ export class Renderer3D implements IRenderer {
   private treesGroup = new THREE.Group();
   private rocketsGroup = new THREE.Group();
   private particlesGroup = new THREE.Group();
+  private homebaseGroup = new THREE.Group();
 
   private ghostMeshes = new Map<any, THREE.Mesh>();
   private rocketMeshes = new Map<any, THREE.Group>();
@@ -61,6 +63,8 @@ export class Renderer3D implements IRenderer {
   // Interaction state
   private isPointerDown = false;
   private lastPointerPos = { x: 0, y: 0 };
+  private camJoyX = 0;
+  private camJoyY = 0;
 
   constructor(engine: GameEngine) {
     this.engine = engine;
@@ -76,6 +80,8 @@ export class Renderer3D implements IRenderer {
     streetEdges: any[];
     currentRotation?: number;
     isRespawning?: boolean;
+    camJoyX?: number;
+    camJoyY?: number;
   }): void {
     this.pacLatLng = state.pacLatLng;
     this.ghosts = state.ghosts;
@@ -89,6 +95,8 @@ export class Renderer3D implements IRenderer {
     if (state.isRespawning !== undefined) {
       this.isRespawning = state.isRespawning;
     }
+    if (state.camJoyX !== undefined) this.camJoyX = state.camJoyX;
+    if (state.camJoyY !== undefined) this.camJoyY = state.camJoyY;
   }
 
   public bindMap(map: L.Map, _canvas: HTMLCanvasElement, _ctx?: CanvasRenderingContext2D): void {
@@ -220,6 +228,7 @@ export class Renderer3D implements IRenderer {
     this.scene.add(this.treesGroup);
     this.scene.add(this.rocketsGroup);
     this.scene.add(this.particlesGroup);
+    this.scene.add(this.homebaseGroup);
 
     this.setupCameraControls(container);
 
@@ -441,6 +450,19 @@ export class Renderer3D implements IRenderer {
     const roadWidth = 22;  // narrow streets — blocks are clearly visible between
     const Y_ROAD = 0.0;
 
+    // Dash marking material
+    const dashMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.85,
+      // polygonOffset pulling to front just in case, but physical Y lift will do most of the work
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+      depthWrite: false
+    });
+    const dashGeo_len = 7;
+    const dashGeo = new THREE.PlaneGeometry(dashGeo_len, 1.2);
     // 1. Visual Simplification: Snap close nodes to a grid for cleaner layout
     const visualPositions = new Map<string, THREE.Vector3>();
     const snapGrid = 40;
@@ -467,11 +489,10 @@ export class Renderer3D implements IRenderer {
     nodes.forEach(node => {
       const p1 = visualPositions.get(node.id)!;
 
-      // ── ROUNDED CAP — only at true intersections (3+ roads) or dead-ends ──
-      // Straight-through waypoints (exactly 2 neighbors) get no cap to avoid
-      // the "puddle" appearance along smooth road sections.
+      // ── ROUNDED CAP — drawn at ALL waypoints to ensure smooth corners
+      // even if a road just bends with 2 neighbors without crossing.
       const iKey = `${p1.x},${p1.z}`;
-      if (!drawnIntersections.has(iKey) && node.neighbors.length !== 2) {
+      if (!drawnIntersections.has(iKey)) {
         drawnIntersections.add(iKey);
         const cap = new THREE.Mesh(circleGeo, roadMat);
         cap.rotation.x = -Math.PI / 2;
@@ -506,27 +527,223 @@ export class Renderer3D implements IRenderer {
         road.receiveShadow = true;
         road.castShadow = false;
         this.streetsGroup.add(road);
+
+        // ── DASHED MARKING ───────────────────────────────────────────────────
+        const c1 = (node.neighbors.length === 2) ? 0 : 13;
+        const c2 = (target.neighbors.length === 2) ? 0 : 13;
+        
+        const markDist = dist - c1 - c2;
+        if (markDist > 0) {
+          const dirX = dx / dist;
+          const dirZ = dz / dist;
+          
+          // To keep spacing perfectly continuous across all road pieces,
+          // we align them mathematically across the global 3D space.
+          let basisX = dirX;
+          let basisZ = dirZ;
+          if (basisX < 0 || (basisX === 0 && basisZ < 0)) {
+            basisX = -basisX;
+            basisZ = -basisZ;
+          }
+          
+          // 6 unit dash, 14 unit gap => 20 unit cycle (evenly distributed, not too tight)
+          const cycleDist = dashGeo_len + 14;
+          
+          // Phase projection maps the 3D position to a 1D timeline
+          const phase_p1 = p1.x * basisX + p1.z * basisZ;
+          const phaseRate = dirX * basisX + dirZ * basisZ; // Will be 1 or -1
+          
+          const t_start = c1;
+          const t_end = dist - c2;
+          
+          let min_val, max_val;
+          if (phaseRate > 0) {
+            min_val = phase_p1 + t_start;
+            max_val = phase_p1 + t_end;
+          } else {
+            min_val = phase_p1 - t_end;
+            max_val = phase_p1 - t_start;
+          }
+          
+          // Find all multiples of the dash cycle that fall within this road segment
+          const min_N = Math.ceil(min_val / cycleDist);
+          const max_N = Math.floor(max_val / cycleDist);
+          
+          for (let N = min_N; N <= max_N; N++) {
+            const phase_target = N * cycleDist;
+            const t = (phase_target - phase_p1) / phaseRate;
+            
+            const dX = p1.x + dirX * t;
+            const dZ = p1.z + dirZ * t;
+            
+            const markMesh = new THREE.Mesh(dashGeo, dashMat);
+            markMesh.rotation.x = -Math.PI / 2;
+            markMesh.rotation.z = -angle;
+            // Lift Y slightly above Y_ROAD to completely prevent z-fighting
+            markMesh.position.set(dX, Y_ROAD + 0.1, dZ);
+            this.streetsGroup.add(markMesh);
+          }
+        }
       });
     });
 
-    // 5. Dots
+    // 5. Dots - 3D Numbers (0 and 1) with black contours
+    this.dotsGroup.clear();
     const dots = this.engine.getDots();
-    const dotGeo = new THREE.BoxGeometry(3, 3, 3);
-    const dotMat = new THREE.MeshStandardMaterial({ color: 0xffde00, emissive: 0xffde00, emissiveIntensity: 0.5 });
+
+    // Perfectly round 0 (Ellipse)
+    const shape0 = new THREE.Shape();
+    shape0.absellipse(0, 0, 1.2, 1.8, 0, Math.PI * 2, false, 0);
+    const hole0 = new THREE.Path();
+    hole0.absellipse(0, 0, 0.4, 1.0, 0, Math.PI * 2, true, 0);
+    shape0.holes.push(hole0);
+
+    const geo0 = new THREE.ExtrudeGeometry(shape0, { depth: 0.8, bevelEnabled: false, curveSegments: 24 });
+    geo0.translate(0, 0, -0.4);
+    const edges0 = new THREE.EdgesGeometry(geo0, 40); // 40 degrees threshold for smooth edge hiding
+
+    // Sleeker 1
+    const shape1 = new THREE.Shape();
+    shape1.moveTo(-0.2, -1.8);
+    shape1.lineTo(0.4, -1.8);
+    shape1.lineTo(0.4, 1.8);
+    shape1.lineTo(-0.2, 1.8);
+    shape1.lineTo(-1.0, 1.0);
+    shape1.lineTo(-0.5, 0.6);
+    shape1.lineTo(-0.2, 0.9);
+    shape1.lineTo(-0.2, -1.8);
+
+    const geo1 = new THREE.ExtrudeGeometry(shape1, { depth: 0.8, bevelEnabled: false });
+    geo1.translate(0, 0, -0.4);
+    const edges1 = new THREE.EdgesGeometry(geo1, 40);
+
+    const dotMatFront = new THREE.MeshStandardMaterial({ color: 0xffe600, emissive: 0xa89000, emissiveIntensity: 0.4 });
+    const dotMatSide = new THREE.MeshStandardMaterial({ color: 0x000000, roughness: 0.8 });
+    const outlineMat = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 2 });
+
+    // ExtrudeGeometry applies index 0 to front/back, and index 1 to the extruded sides
+    const dotMats = [dotMatFront, dotMatSide];
+
+    const group0 = new THREE.Group();
+    group0.add(new THREE.Mesh(geo0, dotMats));
+    group0.add(new THREE.LineSegments(edges0, outlineMat));
+    group0.scale.set(1.4, 1.4, 1.4);
+
+    const group1 = new THREE.Group();
+    group1.add(new THREE.Mesh(geo1, dotMats));
+    group1.add(new THREE.LineSegments(edges1, outlineMat));
+    group1.scale.set(1.4, 1.4, 1.4);
+
+    let count = 0;
+    const renderedPositions = new Set<string>();
+
     dots.forEach(dot => {
       if (!dot) return;
-      // Snap dot to visual road pos
       const pos = visualPositions.get(dot.id) || this.latLonToWorld(dot.lat, dot.lon);
-      const mesh = new THREE.Mesh(dotGeo, dotMat);
-      mesh.position.set(pos.x, 5, pos.z);
-      mesh.castShadow = false; // Disable shadows to keep road surface clean
-      this.dotsGroup.add(mesh);
+
+      // Deduplicate visual positions so multiple dots at intersections don't overlap into a messy lantern
+      const posKey = `${Math.round(pos.x)},${Math.round(pos.z)}`;
+      if (renderedPositions.has(posKey)) return;
+      renderedPositions.add(posKey);
+
+      const isZero = (count % 2 === 0);
+      count++;
+
+      const instance = isZero ? group0.clone() : group1.clone();
+      instance.position.set(pos.x, 5.5, pos.z);
+      // Give each a unique rotation offset based on count so they spin beautifully
+      instance.userData = { id: dot.id, hash: count };
+      this.dotsGroup.add(instance);
     });
 
     this.buildBuildings3D();
     this.buildTrees3D();
+    this.buildHomebase3D();
 
     this.isMapBuilt = true;
+  }
+
+  private buildHomebase3D() {
+    this.homebaseGroup.clear();
+    const homeNodeId = this.engine.getInitialPacmanNodeId();
+    if (!homeNodeId) return;
+    const node = this.engine.getNodes().get(homeNodeId);
+    if (!node) return;
+
+    const pos = this.latLonToWorld(node.lat, node.lon);
+
+    // Create a tall cylinder for the glowing pillar
+    const radius = 22; // roughly pacman size
+    const height = 2000; // reaching high into the sky
+    const geometry = new THREE.CylinderGeometry(radius, radius, height, 32, 1, true);
+
+    // Custom Shader setup for edge-fading (Fresnel/Glow effect)
+    const vertexShader = `
+      varying vec3 vNormal;
+      varying vec3 vViewPosition;
+      void main() {
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        vNormal = normalize(normalMatrix * normal);
+        vViewPosition = -mvPosition.xyz;
+        gl_Position = projectionMatrix * mvPosition;
+      }
+    `;
+
+    const fragmentShader = `
+      uniform vec3 color;
+      uniform float baseOpacity;
+      varying vec3 vNormal;
+      varying vec3 vViewPosition;
+      void main() {
+        vec3 normal = normalize(vNormal);
+        vec3 viewDir = normalize(vViewPosition);
+        
+        // Calculate the dot product between normal and view direction.
+        // It's 1.0 when facing the camera, 0.0 at the edges.
+        float intensity = max(dot(normal, viewDir), 0.0);
+        
+        // We want it to be opaque in the center, transparent at the edges.
+        // By raising it to a power, we control how sharp the falloff is.
+        float alpha = pow(intensity, 2.5) * baseOpacity;
+        
+        gl_FragColor = vec4(color, alpha);
+      }
+    `;
+
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        color: { value: new THREE.Color(0xff00ff) },
+        baseOpacity: { value: 0.25 } // Higher base because edges will fade
+      },
+      vertexShader: vertexShader,
+      fragmentShader: fragmentShader,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      side: THREE.FrontSide, // FrontSide is usually better for custom dot-product fresnel
+      depthWrite: false
+    });
+
+    const pillar = new THREE.Mesh(geometry, material);
+    pillar.position.set(pos.x, height / 2, pos.z);
+    pillar.name = 'pillar';
+
+    // Add an inner blue core
+    const coreRadius = 1.5; // Much narrower core as requested (was 6)
+    const coreGeo = new THREE.CylinderGeometry(coreRadius, coreRadius, height, 16, 1, true);
+    const coreMat = new THREE.MeshBasicMaterial({
+      color: 0x0050ff,
+      transparent: true,
+      opacity: 0.2, // Set to 0.2 as requested
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    });
+    const core = new THREE.Mesh(coreGeo, coreMat);
+    core.position.set(pos.x, height / 2, pos.z);
+    core.name = 'core';
+
+    this.homebaseGroup.add(pillar);
+    this.homebaseGroup.add(core);
   }
 
   private buildBuildings3D() {
@@ -647,35 +864,93 @@ export class Renderer3D implements IRenderer {
   }
 
   private updateItems3D() {
-    // We recreate items occasionally or just keep track. For now, simple clear and rebuild since count is low.
     this.itemsGroup.clear();
 
-    const pGeo = new THREE.OctahedronGeometry(6);
-    const pMat = new THREE.MeshStandardMaterial({ color: 0x00ffcc, emissive: 0x00ffcc, emissiveIntensity: 0.8 });
+    const createCoinTex = (text: string, color: string, isEmoji: boolean) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 128;
+      canvas.height = 128;
+      const ctx = canvas.getContext('2d')!;
+      
+      ctx.fillStyle = '#050505'; // nearly black so background doesn't glow too bright
+      ctx.beginPath();
+      ctx.arc(64, 64, 60, 0, Math.PI * 2);
+      ctx.fill();
+      
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 8;
+      ctx.stroke();
+      
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      if (isEmoji) {
+         ctx.font = '60px serif';
+         ctx.fillText(text, 64, 64);
+      } else {
+         ctx.font = 'bold 50px monospace';
+         ctx.fillStyle = color;
+         ctx.fillText(text, 64, 64);
+      }
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.anisotropy = 4;
+      return tex;
+    };
+
+    if (!(this as any)._powerTex) {
+      (this as any)._powerTex = createCoinTex('</>', '#00ffcc', false);
+      (this as any)._rocketTex = createCoinTex('🚀', '#ff3300', true);
+    }
+
+    const coinGeo = new THREE.CylinderGeometry(8, 8, 2, 32);
+    const pMatSide = new THREE.MeshStandardMaterial({ color: 0x00ffcc, roughness: 0.4, metalness: 0.8 });
+    const pMatFace = new THREE.MeshStandardMaterial({ 
+      map: (this as any)._powerTex, 
+      emissiveMap: (this as any)._powerTex, 
+      emissive: 0xffffff, 
+      emissiveIntensity: 2.0, 
+      roughness: 0.3 
+    });
+    const pMats = [pMatSide, pMatFace, pMatFace]; // 0: side, 1: top, 2: bottom
+
+    const rMatSide = new THREE.MeshStandardMaterial({ color: 0xff3300, roughness: 0.4, metalness: 0.8 });
+    const rMatFace = new THREE.MeshStandardMaterial({ 
+      map: (this as any)._rocketTex, 
+      emissiveMap: (this as any)._rocketTex, 
+      emissive: 0xffffff, 
+      emissiveIntensity: 2.0, 
+      roughness: 0.3 
+    });
+    const rMats = [rMatSide, rMatFace, rMatFace];
+
+    const nowStr = performance.now() / 500;
+    const yFloat = 10 + Math.sin(performance.now() / 200) * 3;
 
     this.engine.getPowerItems().forEach(item => {
       if (!item) return;
       const pos = this.latLonToWorld(item.lat, item.lon);
-      const mesh = new THREE.Mesh(pGeo, pMat);
-      mesh.position.copy(pos);
-      mesh.position.y = 10 + Math.sin(performance.now() / 200) * 3;
-      mesh.rotation.y += performance.now() / 500;
-      this.itemsGroup.add(mesh);
+      const group = new THREE.Group();
+      const mesh = new THREE.Mesh(coinGeo, pMats);
+      mesh.rotation.x = Math.PI / 2; // Stand coin upright
+      mesh.castShadow = true;
+      group.add(mesh);
+      group.position.copy(pos);
+      group.position.y = yFloat;
+      group.rotation.y = nowStr;
+      this.itemsGroup.add(group);
     });
-
-    const rGeo = new THREE.ConeGeometry(5, 15, 4);
-    const rMat = new THREE.MeshStandardMaterial({ color: 0xff3300, emissive: 0xff3300, emissiveIntensity: 0.8 });
 
     this.engine.getRocketItems().forEach(item => {
       if (!item) return;
       const pos = this.latLonToWorld(item.lat, item.lon);
-      const mesh = new THREE.Mesh(rGeo, rMat);
-      mesh.position.copy(pos);
-      mesh.position.y = 10 + Math.sin(performance.now() / 200) * 3;
-      mesh.castShadow = true; // Floating items should cast shadows
-      mesh.rotation.y += performance.now() / 500;
-      mesh.rotation.x = Math.PI; // point down
-      this.itemsGroup.add(mesh);
+      const group = new THREE.Group();
+      const mesh = new THREE.Mesh(coinGeo, rMats);
+      mesh.rotation.x = Math.PI / 2;
+      mesh.castShadow = true;
+      group.add(mesh);
+      group.position.copy(pos);
+      group.position.y = yFloat;
+      group.rotation.y = nowStr;
+      this.itemsGroup.add(group);
     });
   }
 
@@ -685,6 +960,31 @@ export class Renderer3D implements IRenderer {
     if (!this.isMapBuilt && this.engine.getNodes().size > 0) {
       this.buildMap3D();
     }
+
+    // Update Homebase Animation
+    if (this.homebaseGroup.children.length > 0) {
+      const pulse = Math.sin(_now / 400) * 0.1 + 1; // 0.9 to 1.1 scale pulsing
+      const pillar = this.homebaseGroup.getObjectByName('pillar');
+      if (pillar) {
+        pillar.scale.set(pulse, 1, pulse);
+      }
+    }
+
+    // Update Dots (visibility and rotation)
+    const activeDotsMap = this.engine.getDots();
+    const activeDotIds = new Set(Array.from(activeDotsMap.values()).map(d => d.id));
+    this.dotsGroup.children.forEach(dotMesh => {
+      const dotId = dotMesh.userData.id;
+      if (!dotId) return;
+
+      if (activeDotIds.has(dotId)) {
+        dotMesh.visible = true;
+        // Spin 0 and 1 numbers
+        dotMesh.rotation.y = _now / 500 + parseFloat(dotMesh.userData.hash || 0) * 0.5;
+      } else {
+        dotMesh.visible = false;
+      }
+    });
 
     // Update Pacman
     if (this.pacLatLng && this.pacMesh) {
@@ -752,8 +1052,12 @@ export class Renderer3D implements IRenderer {
       // 3rd Person Follow Camera
       const tiltRad = (90 - this.camTilt) * Math.PI / 180;
 
-      // Auto-center camera horizontally if mouse is released (snaps back behind pacman)
-      if (!this.isPointerDown) {
+      // Apply continuous joystick rotation if present
+      if (Math.abs(this.camJoyX) > 0.05) this.camAngle -= this.camJoyX * 0.05;
+      if (Math.abs(this.camJoyY) > 0.05) this.camTilt = Math.min(85, Math.max(10, this.camTilt + this.camJoyY * 2.5));
+
+      // Auto-center camera horizontally if mouse is released and cam joystick is idle
+      if (!this.isPointerDown && Math.abs(this.camJoyX) < 0.05) {
         this.camAngle *= 0.9; // Smoothly return to 0 (looking straight ahead)
       }
 
@@ -884,11 +1188,60 @@ export class Renderer3D implements IRenderer {
       let group = this.rocketMeshes.get(rocket);
       if (!group) {
         group = new THREE.Group();
-        const rBody = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, 12, 8), new THREE.MeshStandardMaterial({ color: 0x333333 }));
-        const rTip = new THREE.Mesh(new THREE.ConeGeometry(3, 6, 8), new THREE.MeshStandardMaterial({ color: 0xff3300 }));
-        rTip.position.y = 9;
-        group.add(rBody, rTip);
-        group.position.y = 15;
+        
+        const meshGroup = new THREE.Group();
+        const blackMat = new THREE.MeshStandardMaterial({ color: 0x181818, roughness: 0.3 });
+        const whiteMat = new THREE.MeshStandardMaterial({ color: 0xffffff });
+        const rimMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0a });
+
+        // Body (Capsule is pointing UP/Y)
+        const body = new THREE.Mesh(new THREE.CapsuleGeometry(4, 6, 16, 16), blackMat);
+        
+        // Rim
+        const rim = new THREE.Mesh(new THREE.CylinderGeometry(4.2, 4.2, 2, 16), rimMat);
+        rim.position.y = -6;
+
+        // Eyes placed on -Z (will be rotated to Top/Up)
+        const leftEye = new THREE.Mesh(new THREE.SphereGeometry(1.5, 16, 16), whiteMat);
+        leftEye.scale.set(1, 1, 0.4);
+        leftEye.position.set(-2, 3, -3.2); // -Z
+        leftEye.rotation.y = Math.PI / 6;
+
+        const rightEye = new THREE.Mesh(new THREE.SphereGeometry(1.5, 16, 16), whiteMat);
+        rightEye.scale.set(1, 1, 0.4);
+        rightEye.position.set(2, 3, -3.2); // -Z
+        rightEye.rotation.y = -Math.PI / 6;
+
+        const lp = new THREE.Mesh(new THREE.SphereGeometry(0.7, 16, 16), new THREE.MeshBasicMaterial({ color: 0x0 }));
+        lp.position.set(-1.8, 3, -3.7);
+        const rp = new THREE.Mesh(new THREE.SphereGeometry(0.7, 16, 16), new THREE.MeshBasicMaterial({ color: 0x0 }));
+        rp.position.set(1.8, 3, -3.7);
+
+        // Mouth on -Z
+        const mouthStart = Math.PI * 0.7;
+        const mouthLen = Math.PI * 0.6;
+        const mouth = new THREE.Mesh(new THREE.CylinderGeometry(4.05, 4.05, 3, 16, 1, true, mouthStart, mouthLen), whiteMat);
+        mouth.position.y = -1;
+
+        // Teeth lines
+        const lineMat = new THREE.MeshBasicMaterial({ color: 0x0 });
+        for(let i=-2; i<=2; i++) {
+           if (i === 0) continue; 
+           const line = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3, 0.2), lineMat);
+           line.position.set(i * 1.0, -1, -4.1);
+           meshGroup.add(line);
+        }
+        const hLine = new THREE.Mesh(new THREE.BoxGeometry(3.5, 0.2, 0.2), lineMat);
+        hLine.position.set(0, -1, -4.1);
+        meshGroup.add(hLine);
+        
+        meshGroup.add(body, rim, leftEye, rightEye, lp, rp, mouth);
+
+        // Rotate so it points along Z! +Y nose -> +Z. -Z face -> +Y Up!
+        meshGroup.rotation.x = Math.PI / 2;
+        group.add(meshGroup);
+
+        group.position.y = 8;
         this.rocketsGroup.add(group);
         this.rocketMeshes.set(rocket, group);
       }
@@ -905,9 +1258,22 @@ export class Renderer3D implements IRenderer {
         const direction = p2.clone().sub(p1).normalize();
 
         // Calculate angle on XZ plane
+        // Mesh is built natively facing +Z, so direct atan2(x,z) handles exact heading
         const angle = Math.atan2(direction.x, direction.z);
         group.rotation.y = angle;
-        group.rotation.x = Math.PI / 2; // lay flat pointing forward
+
+        // Emit smoke trail
+        if (Math.random() < 0.6) {
+           const sMat = new THREE.MeshBasicMaterial({ color: 0xdddddd, transparent: true, opacity: 0.8 });
+           const smoke = new THREE.Mesh(new THREE.SphereGeometry(1.5 + Math.random(), 8, 8), sMat);
+           smoke.position.copy(rPos);
+           smoke.position.y = 8; 
+           // pull backward slightly
+           smoke.position.sub(direction.clone().multiplyScalar(4));
+           smoke.userData = { life: 1.0, fade: 0.02, scale: 1.03 };
+           this.particlesGroup.add(smoke);
+           this.smokeTrail.push(smoke);
+        }
       }
     });
 
@@ -917,6 +1283,19 @@ export class Renderer3D implements IRenderer {
         this.rocketsGroup.remove(mesh);
         this.rocketMeshes.delete(key);
       }
+    }
+
+    // Process smoke trail
+    for (let i = this.smokeTrail.length - 1; i >= 0; i--) {
+        const s = this.smokeTrail[i];
+        s.userData.life -= s.userData.fade;
+        s.scale.multiplyScalar(s.userData.scale);
+        s.position.y += 0.2;
+        (s.material as THREE.Material).opacity = s.userData.life;
+        if (s.userData.life <= 0) {
+          this.particlesGroup.remove(s);
+          this.smokeTrail.splice(i, 1);
+        }
     }
 
     // Particles (Sparks)

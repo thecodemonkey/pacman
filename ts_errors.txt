@@ -1,5 +1,0 @@
-src/render/Renderer3D.ts(15,11): error TS6133: 'rockets' is declared but its value is never read.
-src/render/Renderer3D.ts(16,11): error TS6133: 'sparks' is declared but its value is never read.
-src/render/Renderer3D.ts(17,11): error TS6133: 'fireParticles' is declared but its value is never read.
-src/render/Renderer3D.ts(18,11): error TS6133: 'currentTheme' is declared but its value is never read.
-src/render/Renderer3D.ts(203,33): error TS6133: 'i' is declared but its value is never read.

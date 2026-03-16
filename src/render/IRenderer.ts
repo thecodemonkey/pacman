@@ -47,5 +47,7 @@ export interface IRenderer {
     streetEdges?: Array<{ aLat: number; aLon: number; bLat: number; bLon: number }>;
     currentRotation?: number;
     isRespawning?: boolean;
+    camJoyX?: number;
+    camJoyY?: number;
   }): void;
 }
