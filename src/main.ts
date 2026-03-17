@@ -107,6 +107,10 @@ const HUD = {
 
 // Removed internal theme colors (moved to Renderer2D)
 
+const bgMusic = new Audio('/vibeman.m4a');
+bgMusic.loop = true;
+bgMusic.volume = 0.4;
+
 // --- Rendering Abstraction ---
 let renderer: IRenderer;
 
@@ -181,6 +185,8 @@ function setupStartScreen() {
   });
 
   HUD.btnStart.addEventListener('click', () => {
+    bgMusic.play().catch(e => console.warn("Audio autoplay blocked", e));
+
     const mode = document.querySelector<HTMLInputElement>('input[name="loc-mode"]:checked')!.value;
     HUD.startScreen.classList.add('hidden');
     HUD.loading.classList.remove('hidden');
@@ -459,6 +465,8 @@ function spawnGhosts() {
 
 function showGameOver() {
   if (isGameOver) return;
+  bgMusic.pause();
+  bgMusic.currentTime = 0;
   isGameOver = true;
   HUD.finalScore.innerText = engine.getState().score.toString();
   HUD.gameOverScreen.classList.remove('hidden');
@@ -496,6 +504,7 @@ function resetGameParams() {
 
 HUD.btnRestart.addEventListener('click', () => {
   resetGameParams();
+  bgMusic.play().catch(e => console.warn("Audio autoplay blocked", e));
 });
 
 HUD.hudCitySelect.addEventListener('change', () => {

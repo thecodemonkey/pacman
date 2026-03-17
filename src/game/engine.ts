@@ -1,4 +1,96 @@
+// @ts-ignore
+import { sfxr } from 'jsfxr';
 
+let sndDot: HTMLAudioElement;
+let sndPower: HTMLAudioElement;
+let sndRocket: HTMLAudioElement;
+let sndHurt: HTMLAudioElement;
+let sndEatBot: HTMLAudioElement;
+let sndGameOver: HTMLAudioElement;
+
+function initFX() {
+  if (sndDot) return;
+  // A clean "blip" style for simple dots
+
+  sndDot = sfxr.toAudio({ "oldParams": true, "wave_type": 1, "p_env_attack": 0, "p_env_sustain": 0.09877798775953311, "p_env_punch": 0.3000388199230088, "p_env_decay": 0.2886666938068561, "p_base_freq": 0.4423710185748773, "p_freq_limit": 0, "p_freq_ramp": 0, "p_freq_dramp": 0, "p_vib_strength": 0, "p_vib_speed": 0, "p_arp_mod": 0.3932825996010145, "p_arp_speed": 0.5701669785679001, "p_duty": 0, "p_duty_ramp": 0, "p_repeat_speed": 0, "p_pha_offset": 0, "p_pha_ramp": 0, "p_lpf_freq": 1, "p_lpf_ramp": 0, "p_lpf_resonance": 0, "p_hpf_freq": 0, "p_hpf_ramp": 0, "sound_vol": 0.25, "sample_rate": 44100, "sample_size": 8 });
+  sndPower = sfxr.toAudio({ "oldParams": true, "wave_type": 0, "p_env_attack": 0, "p_env_sustain": 0.32631396799662543, "p_env_punch": 0, "p_env_decay": 0.18518514527530378, "p_base_freq": 0.35634140235646206, "p_freq_limit": 0, "p_freq_ramp": 0.40448263206465085, "p_freq_dramp": 0, "p_vib_strength": 0, "p_vib_speed": 0, "p_arp_mod": 0, "p_arp_speed": 0, "p_duty": 0.28835789805277895, "p_duty_ramp": 0, "p_repeat_speed": 0.5934455701144451, "p_pha_offset": 0, "p_pha_ramp": 0, "p_lpf_freq": 1, "p_lpf_ramp": 0, "p_lpf_resonance": 0, "p_hpf_freq": 0, "p_hpf_ramp": 0, "sound_vol": 0.25, "sample_rate": 44100, "sample_size": 8 });
+  sndRocket = sfxr.toAudio({ "oldParams": true, "wave_type": 1, "p_env_attack": 0, "p_env_sustain": 0.11758872650608598, "p_env_punch": 0.26218814953445546, "p_env_decay": 0.35451344849985245, "p_base_freq": 0.7286071210957927, "p_freq_limit": 0.2944029021574492, "p_freq_ramp": -0.22139311539839662, "p_freq_dramp": 0, "p_vib_strength": 0, "p_vib_speed": 0, "p_arp_mod": 0, "p_arp_speed": 0, "p_duty": 0.3680874400681634, "p_duty_ramp": 0.04376634158586055, "p_repeat_speed": 0, "p_pha_offset": 0, "p_pha_ramp": 0, "p_lpf_freq": 1, "p_lpf_ramp": 0, "p_lpf_resonance": 0, "p_hpf_freq": 0.1217162274586077, "p_hpf_ramp": 0, "sound_vol": 0.25, "sample_rate": 44100, "sample_size": 8 });
+  sndHurt = sfxr.toAudio({ "oldParams": true, "wave_type": 0, "p_env_attack": 0, "p_env_sustain": 0.37471004675654696, "p_env_punch": 0.6860174636197521, "p_env_decay": 0.2128471110972221, "p_base_freq": 0.13615778746815113, "p_freq_limit": 0, "p_freq_ramp": 0, "p_freq_dramp": 0, "p_vib_strength": 0, "p_vib_speed": 0, "p_arp_mod": 0, "p_arp_speed": 0.46668402615692045, "p_duty": 0.12793523788733863, "p_duty_ramp": 0, "p_repeat_speed": 0, "p_pha_offset": 0, "p_pha_ramp": 0, "p_lpf_freq": 0.5753186047632948, "p_lpf_ramp": -0.5857498765596403, "p_lpf_resonance": 0.908821977602689, "p_hpf_freq": 0, "p_hpf_ramp": 0.47156449876996887, "sound_vol": 0.25, "sample_rate": 44100, "sample_size": 8 });
+  sndEatBot = sfxr.toAudio({ "oldParams": true, "wave_type": 0, "p_env_attack": 0, "p_env_sustain": 0.3585212877299999, "p_env_punch": 0, "p_env_decay": 0.35371213214177866, "p_base_freq": 0.4050844370758402, "p_freq_limit": 0, "p_freq_ramp": 0.24036058883768285, "p_freq_dramp": 0, "p_vib_strength": 0, "p_vib_speed": 0, "p_arp_mod": 0, "p_arp_speed": 0, "p_duty": 0.27159017943078934, "p_duty_ramp": 0, "p_repeat_speed": 0, "p_pha_offset": 0, "p_pha_ramp": 0, "p_lpf_freq": 1, "p_lpf_ramp": 0, "p_lpf_resonance": 0, "p_hpf_freq": 0, "p_hpf_ramp": 0, "sound_vol": 0.25, "sample_rate": 44100, "sample_size": 8 });
+  sndGameOver = sfxr.toAudio({ "oldParams": true, "wave_type": 3, "p_env_attack": 0, "p_env_sustain": 0.6, "p_env_punch": 0.5, "p_env_decay": 0.7, "p_base_freq": 0.3, "p_freq_limit": 0, "p_freq_ramp": -0.4, "p_freq_dramp": -0.05, "p_vib_strength": 0.2, "p_vib_speed": 0.2, "p_arp_mod": 0, "p_arp_speed": 0, "p_duty": 0, "p_duty_ramp": 0, "p_repeat_speed": 0, "p_pha_offset": 0, "p_pha_ramp": 0, "p_lpf_freq": 1, "p_lpf_ramp": 0, "p_lpf_resonance": 0, "p_hpf_freq": 0, "p_hpf_ramp": 0, "sound_vol": 0.5, "sample_rate": 44100, "sample_size": 8 });
+}
+
+function playDot() {
+  if (sndDot) {
+    if ((sndDot as any).setVolume) {
+      (sndDot as any).setVolume(0.15).play();
+    } else {
+      const s = (sndDot as any).cloneNode(true) as HTMLAudioElement;
+      s.volume = 0.15;
+      s.play().catch(() => { });
+    }
+  }
+}
+
+function playPower() {
+  if (sndPower) {
+    if ((sndPower as any).setVolume) {
+      (sndPower as any).setVolume(0.4).play();
+    } else {
+      const s = (sndPower as any).cloneNode(true) as HTMLAudioElement;
+      s.volume = 0.4;
+      s.play().catch(() => { });
+    }
+  }
+}
+
+function playRocket() {
+  if (sndRocket) {
+    if ((sndRocket as any).setVolume) {
+      (sndRocket as any).setVolume(0.4).play();
+    } else {
+      const s = (sndRocket as any).cloneNode(true) as HTMLAudioElement;
+      s.volume = 0.4;
+      s.play().catch(() => { });
+    }
+  }
+}
+
+export function playHurt() {
+  if (sndHurt) {
+    if ((sndHurt as any).setVolume) {
+      (sndHurt as any).setVolume(0.5).play();
+    } else {
+      const s = (sndHurt as any).cloneNode(true) as HTMLAudioElement;
+      s.volume = 0.5;
+      s.play().catch(() => { });
+    }
+  }
+}
+
+function playEatBot() {
+  if (sndEatBot) {
+    if ((sndEatBot as any).setVolume) {
+      (sndEatBot as any).setVolume(0.6).play();
+    } else {
+      const s = (sndEatBot as any).cloneNode(true) as HTMLAudioElement;
+      s.volume = 0.6;
+      s.play().catch(() => { });
+    }
+  }
+}
+
+function playGameOver() {
+  if (sndGameOver) {
+    if ((sndGameOver as any).setVolume) {
+      (sndGameOver as any).setVolume(0.6).play();
+    } else {
+      const s = (sndGameOver as any).cloneNode(true) as HTMLAudioElement;
+      s.volume = 0.6;
+      s.play().catch(() => { });
+    }
+  }
+}
 
 export interface GameNode {
   id: string;
@@ -37,7 +129,9 @@ export class GameEngine {
   private initialPacmanNodeId: string = "";
   private state: GameState = { score: 0, lives: 3, isGameOver: false, powerUpActive: false, powerUpEndTime: 0 };
 
-  constructor() {}
+  constructor() {
+    initFX();
+  }
 
   public buildGraph(osmData: any) {
     this.nodes.clear();
@@ -78,7 +172,7 @@ export class GameEngine {
 
       // Collect buildings
       if (way.tags && way.tags.building) {
-        const bNodes: {lat: number, lon: number}[] = [];
+        const bNodes: { lat: number, lon: number }[] = [];
         for (let i = 0; i < way.nodes.length; i++) {
           const osmNode = nodeLookup.get(way.nodes[i]);
           if (osmNode) {
@@ -100,7 +194,7 @@ export class GameEngine {
 
     // 2. Initial dots and power items
     this.nodes.forEach((_, id) => this.dots.add(id));
-    
+
     // Randomly select 2-3 nodes to be power items (intersections only)
     const intersections = Array.from(this.nodes.keys()).filter(id => this.nodes.get(id)!.neighbors.length > 2);
     const count = Math.min(intersections.length, 3);
@@ -120,7 +214,7 @@ export class GameEngine {
       this.dots.delete(id);
       this.rocketItems.add(id);
     }
-    
+
     // ✅ Keep only the largest connected component (remove isolated road islands)
     this.keepLargestConnectedComponent();
 
@@ -189,26 +283,26 @@ export class GameEngine {
     this.powerItems.clear();
     this.rocketItems.clear();
     this.nodes.forEach((_, id) => this.dots.add(id));
-    
+
     const intersections = Array.from(this.nodes.keys()).filter(id => this.nodes.get(id)!.neighbors.length > 2);
-    
+
     // Power items
     const powerCount = Math.min(intersections.length, 3);
     const chosenIntersections = [...intersections];
     for (let i = 0; i < powerCount; i++) {
-        const idx = Math.floor(Math.random() * chosenIntersections.length);
-        const id = chosenIntersections.splice(idx, 1)[0];
-        this.dots.delete(id);
-        this.powerItems.add(id);
+      const idx = Math.floor(Math.random() * chosenIntersections.length);
+      const id = chosenIntersections.splice(idx, 1)[0];
+      this.dots.delete(id);
+      this.powerItems.add(id);
     }
 
     // Rocket items
     const rocketCount = Math.min(chosenIntersections.length, 3);
     for (let i = 0; i < rocketCount; i++) {
-        const idx = Math.floor(Math.random() * chosenIntersections.length);
-        const id = chosenIntersections.splice(idx, 1)[0];
-        this.dots.delete(id);
-        this.rocketItems.add(id);
+      const idx = Math.floor(Math.random() * chosenIntersections.length);
+      const id = chosenIntersections.splice(idx, 1)[0];
+      this.dots.delete(id);
+      this.rocketItems.add(id);
     }
 
     this.pacmanNodeId = "";
@@ -222,8 +316,11 @@ export class GameEngine {
 
   public loseLife(): boolean {
     this.state.lives -= 1;
-    if (this.state.lives <= 0) {
+    if (this.state.lives > 0) {
+      playHurt();
+    } else {
       this.state.isGameOver = true;
+      playGameOver();
     }
     return this.state.isGameOver;
   }
@@ -316,7 +413,7 @@ export class GameEngine {
   public movePacman(direction: 'up' | 'down' | 'left' | 'right') {
     if (!this.pacmanNodeId) return;
 
-    let dirKey: 'ArrowUp'|'ArrowDown'|'ArrowLeft'|'ArrowRight' = 'ArrowUp';
+    let dirKey: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight' = 'ArrowUp';
     if (direction === 'up') dirKey = 'ArrowUp';
     if (direction === 'down') dirKey = 'ArrowDown';
     if (direction === 'left') dirKey = 'ArrowLeft';
@@ -335,13 +432,16 @@ export class GameEngine {
     if (this.dots.has(nodeId)) {
       this.dots.delete(nodeId);
       this.state.score += 10;
+      playDot();
     } else if (this.powerItems.has(nodeId)) {
       this.powerItems.delete(nodeId);
       this.state.score += 50;
       this.activatePowerUp();
+      playPower();
     } else if (this.rocketItems.has(nodeId)) {
       this.rocketItems.delete(nodeId);
       this.state.score += 100;
+      playRocket();
       // Trigger event or callback for rocket launch
       (window as any).dispatchGameEvent?.('launch-rocket');
     }
@@ -360,6 +460,7 @@ export class GameEngine {
 
   public eatGhost() {
     this.state.score += 200;
+    playEatBot();
   }
 
   public getState() {
@@ -383,7 +484,7 @@ export class GameEngine {
       .map(id => this.nodes.get(id))
       .filter((n): n is GameNode => !!n);
   }
-  
+
   public getPacmanNode() {
     return this.nodes.get(this.pacmanNodeId);
   }
