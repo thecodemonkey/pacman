@@ -20,35 +20,24 @@ if (!fs.existsSync(publicCitiesDir)) {
   fs.mkdirSync(publicCitiesDir, { recursive: true });
 }
 
-function fetchOverpass(lat, lon, resolve, reject) {
-  const radius = 300;
-  const query = `
-    [out:json];
-    (
-      way["highway"~"^(primary|secondary|tertiary|residential|service|footway)$"](around:${radius},${lat},${lon});
-      way["building"](around:${radius},${lat},${lon});
-      node["natural"="tree"](around:${radius},${lat},${lon});
-    );
-    out body;
-    >;
-    out skel qt;
-  `;
-  const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
-
-  https.get(url, (res) => {
-    if (res.statusCode !== 200) {
-      reject(new Error(`Failed with status ${res.statusCode}`));
-      res.resume();
-      return;
-    }
-    
-    let rawData = '';
-    res.on('data', (chunk) => { rawData += chunk; });
-    res.on('end', () => {
-      resolve(rawData);
-    });
-  }).on('error', (e) => {
-    reject(e);
+function fetchOverpassQuery(query) {
+  return new Promise((resolve, reject) => {
+    const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
+    https.get(url, (res) => {
+      if (res.statusCode !== 200) {
+        res.resume();
+        return reject(new Error(`Failed with status ${res.statusCode}`));
+      }
+      let rawData = '';
+      res.on('data', (chunk) => { rawData += chunk; });
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(rawData));
+        } catch (e) {
+          reject(new Error("Failed to parse JSON response"));
+        }
+      });
+    }).on('error', reject);
   });
 }
 
@@ -62,27 +51,58 @@ async function fetchAll() {
     let lonStr = city.lon.toString();
     const file = path.join(publicCitiesDir, `${latStr}_${lonStr}.json`);
 
-    if (fs.existsSync(file)) {
-      console.log(`Skipping ${city.name}, cache already exists.`);
+    if (!fs.existsSync(file)) {
+      console.log(`Skipping ${city.name}, no existing street cache to append to.`);
       continue;
     }
 
-    console.log(`Fetching data for ${city.name} (${city.lat}, ${city.lon})...`);
+    const currentFileRaw = fs.readFileSync(file, 'utf-8');
+    let currentData;
+    try {
+        currentData = JSON.parse(currentFileRaw);
+    } catch(e) {
+        console.error(`Failed to parse ${file}, skipping.`);
+        continue;
+    }
+
+    if (currentData.data && currentData.gastroData !== undefined) {
+      console.log(`Skipping ${city.name}, cache already has gastro data.`);
+      continue;
+    }
+
+    const gastroRadius = 500;
+    const gastroQuery = `[out:json][timeout:25];
+      (
+        node["amenity"~"^(restaurant|fast_food|cafe)$"](around:${gastroRadius},${city.lat},${city.lon});
+        node["shop"="kiosk"](around:${gastroRadius},${city.lat},${city.lon});
+        node["cuisine"~"^(pizza|doner|kebab|asian|chinese|vietnamese|thai|japanese|sushi|noodle)$"](around:${gastroRadius},${city.lat},${city.lon});
+        way["amenity"~"^(restaurant|fast_food|cafe)$"](around:${gastroRadius},${city.lat},${city.lon});
+        way["shop"="kiosk"](around:${gastroRadius},${city.lat},${city.lon});
+        way["cuisine"~"^(pizza|doner|kebab|asian|chinese|vietnamese|thai|japanese|sushi|noodle)$"](around:${gastroRadius},${city.lat},${city.lon});
+        relation["amenity"~"^(restaurant|fast_food|cafe)$"](around:${gastroRadius},${city.lat},${city.lon});
+        relation["shop"="kiosk"](around:${gastroRadius},${city.lat},${city.lon});
+        relation["cuisine"~"^(pizza|doner|kebab|asian|chinese|vietnamese|thai|japanese|sushi|noodle)$"](around:${gastroRadius},${city.lat},${city.lon});
+      );
+      out center;`;
+
+    console.log(`Fetching gastronomy data for ${city.name} (${city.lat}, ${city.lon})...`);
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        const p = new Promise((resolve, reject) => fetchOverpass(city.lat, city.lon, resolve, reject));
-        const data = await p;
-        fs.writeFileSync(file, data);
-        console.log(`Saved ${file}`);
-        await delay(5000);
-        break; // Sucess, break retry loop
+        const gastroData = await fetchOverpassQuery(gastroQuery);
+
+        const combinedData = { data: currentData, gastroData };
+        fs.writeFileSync(file, JSON.stringify(combinedData));
+        
+        console.log(`Saved merged data to ${file}`);
+        await delay(3000); // Backoff before next city
+        break; // Success, break retry loop
       } catch(err) {
-        console.error(`Attempt ${attempt} failed to fetch ${city.name}: ${err.message}.`);
+        console.error(`Attempt ${attempt} failed to fetch ${city.name} gastro data: ${err.message}.`);
         if (attempt < 3) {
-          console.log(`Retrying in 15s...`);
-          await delay(15000); // Backoff and retry
+          console.log(`Retrying in 5s...`);
+          await delay(5000); // Backoff and retry
         } else {
-          console.error(`Giving up on ${city.name} after 3 attempts.`);
+          console.error(`Giving up on ${city.name} gastro data after 3 attempts.`);
         }
       }
     }

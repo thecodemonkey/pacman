@@ -50,4 +50,9 @@ export interface IRenderer {
     camJoyX?: number;
     camJoyY?: number;
   }): void;
+
+  /**
+   * Called when a new city/map dataset is loaded
+   */
+  onMapLoaded?(): void;
 }

@@ -34,6 +34,8 @@ export class Renderer3D implements IRenderer {
   private rocketsGroup = new THREE.Group();
   private particlesGroup = new THREE.Group();
   private homebaseGroup = new THREE.Group();
+  private cloudsGroup = new THREE.Group();
+  private sunMesh?: THREE.Mesh;
 
   private ghostMeshes = new Map<any, THREE.Mesh>();
   private rocketMeshes = new Map<any, THREE.Group>();
@@ -103,14 +105,24 @@ export class Renderer3D implements IRenderer {
     this.map = map;
   }
 
+  public onMapLoaded(): void {
+    this.baseLat = 0;
+    this.baseLon = 0;
+    this.isMapBuilt = false;
+    this.ghostMeshes.clear();
+    this.ghostGroup.clear();
+    this.rocketMeshes.clear();
+    this.rocketsGroup.clear();
+  }
+
   public init(container: HTMLElement): void {
     const w = container.clientWidth;
     const h = container.clientHeight;
 
     this.scene = new THREE.Scene();
-    // Indigo Sunset Atmosphere
+    // Synthwave Sunset Atmosphere
     this.scene.background = new THREE.Color('#1a1b4b'); // Deep Indigo fallback
-    this.scene.fog = new THREE.Fog(0xff8040, 500, 4000); // Warm orange fog for sunset horizon
+    this.scene.fog = new THREE.Fog('#ff5500', 300, 1800); // Bring fog closer for thick atmospheric haze
 
     this.camera = new THREE.PerspectiveCamera(45, w / h, 1, 10000);
     // Position for a tilted "isometric-like" perspective
@@ -134,10 +146,10 @@ export class Renderer3D implements IRenderer {
     container.appendChild(this.renderer.domElement);
 
     // Lighting config - Balanced Sunset Hues (Lighter atmosphere)
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.65); // Slightly lower to make shadows more visible
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.85); // Increased to make all shadows more transparent
     this.scene.add(ambientLight);
 
-    const dirLight = new THREE.DirectionalLight(0xfff0dd, 1.0);
+    const dirLight = new THREE.DirectionalLight(0xfff0dd, 0.9); // Slightly softer direct light
     dirLight.position.set(800, 1200, 400);
     dirLight.castShadow = true;
     dirLight.shadow.mapSize.width = 4096;
@@ -146,6 +158,7 @@ export class Renderer3D implements IRenderer {
     dirLight.shadow.camera.far = 3000;
     dirLight.shadow.bias = 0.001;   // positive bias pins shadow to surface, eliminates float
     dirLight.shadow.normalBias = 0.05;
+    dirLight.shadow.radius = 1;     // Harder, crisp shadows for buildings and ground elements
     const ext = 600; // tighter frustum — follows Pac-Man so no need for map-wide coverage
     dirLight.shadow.camera.left = -ext;
     dirLight.shadow.camera.right = ext;
@@ -170,12 +183,16 @@ export class Renderer3D implements IRenderer {
       varying vec3 vWorldPosition;
       void main() {
         float h = normalize(vWorldPosition).y;
-        vec3 indigo = vec3(0.02, 0.0, 0.08); // Even darker, near-black violet top
-        vec3 pink = vec3(0.95, 0.0, 0.4);    // Vibrant Magenta/Pink
-        vec3 orange = vec3(1.0, 0.4, 0.0);   // Deep Sunset Orange
+        vec3 darkPurple = vec3(0.15, 0.0, 0.35); // Very dark purple
+        vec3 pink = vec3(0.85, 0.0, 0.5);    // Pink
+        vec3 orange = vec3(1.0, 0.5, 0.0);   // Orange
         
-        vec3 color = mix(orange, pink, smoothstep(-0.2, 0.4, h));
-        color = mix(color, indigo, smoothstep(0.4, 0.8, h));
+        // Transition very quickly from orange to pink near the horizon (0.0 to 0.08)
+        vec3 color = mix(orange, pink, smoothstep(0.0, 0.08, h));
+        
+        // Transition from pink to dark purple relatively low in the sky (0.08 to 0.25)
+        color = mix(color, darkPurple, smoothstep(0.08, 0.25, h));
+        
         gl_FragColor = vec4(color, 1.0);
       }
     `;
@@ -195,7 +212,7 @@ export class Renderer3D implements IRenderer {
     moonShape.holes.push(holePath);
 
     const moonGeo = new THREE.ShapeGeometry(moonShape);
-    const moonMat = new THREE.MeshBasicMaterial({ color: 0xffffcc, side: THREE.DoubleSide });
+    const moonMat = new THREE.MeshBasicMaterial({ color: 0xffffcc, side: THREE.DoubleSide, fog: false });
     const moon = new THREE.Mesh(moonGeo, moonMat);
     moon.position.set(-1000, 2000, -3000); // High in the sky
     moon.scale.set(10, 10, 10);
@@ -229,6 +246,147 @@ export class Renderer3D implements IRenderer {
     this.scene.add(this.rocketsGroup);
     this.scene.add(this.particlesGroup);
     this.scene.add(this.homebaseGroup);
+    this.scene.add(this.cloudsGroup);
+
+    // Fluffy clouds (max 3)
+    const cloudGeo = new THREE.SphereGeometry(18, 32, 32);
+    const cloudMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      emissive: 0xffffff,
+      emissiveIntensity: 0.15, // Make them a bit brighter
+      roughness: 1.0,
+      metalness: 0.0,
+      transparent: true,
+      opacity: 0.95, // Softer and more solid white
+      fog: true // allows clouds to blend into the horizon blur
+    });
+
+    // Soft fake cloud shadow canvas (Blob Shadow)
+    const cShadowCanvas = document.createElement('canvas');
+    cShadowCanvas.width = 128;
+    cShadowCanvas.height = 128;
+    const cCtx = cShadowCanvas.getContext('2d')!;
+    const cGrd = cCtx.createRadialGradient(64, 64, 0, 64, 64, 64);
+    cGrd.addColorStop(0, 'rgba(0, 0, 0, 0.45)');  // Highly transparent soft center
+    cGrd.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    cCtx.fillStyle = cGrd;
+    cCtx.fillRect(0, 0, 128, 128);
+    
+    const cloudShadowTex = new THREE.CanvasTexture(cShadowCanvas);
+    const cloudShadowMat = new THREE.MeshBasicMaterial({
+      map: cloudShadowTex,
+      transparent: true,
+      depthWrite: false,
+      fog: true
+    });
+    // Extra large shadow plane for extreme softness
+    const cloudShadowGeo = new THREE.PlaneGeometry(240, 240);
+
+    for (let c = 0; c < 3; c++) {
+      const cloud = new THREE.Group();
+      
+      // Make a fluffy shape out of 5-7 overlapping spheres
+      const puffCount = 6 + Math.floor(Math.random() * 3);
+      for (let p = 0; p < puffCount; p++) {
+        const puff = new THREE.Mesh(cloudGeo, cloudMat);
+        // Position puff randomly within a local cluster to form a nice cloud
+        puff.position.set(
+          (Math.random() - 0.5) * 40,
+          (Math.random() - 0.5) * 12,
+          (Math.random() - 0.5) * 25
+        );
+        // Random scale for variety (flatter but wider puffs)
+        const scaleX = 0.8 + Math.random() * 0.5;
+        const scaleY = 0.6 + Math.random() * 0.4;
+        const scaleZ = 0.8 + Math.random() * 0.5;
+        puff.scale.set(scaleX, scaleY, scaleZ);
+        
+        // Disable global shadow for clouds to allow sharp building shadows
+        puff.castShadow = false;
+        puff.receiveShadow = false;
+        cloud.add(puff);
+      }
+
+      // Initial positioning over the map space, clearly separated into 3 corners
+      const angle = c * ((Math.PI * 2) / 3) + (Math.random() - 0.5) * 0.5; // Spread around perfectly in 3 corners
+      const radius = 180 + Math.random() * 80; // ~260 max distance from center
+      
+      cloud.position.set(
+        Math.cos(angle) * radius,
+        180 + Math.random() * 40, 
+        Math.sin(angle) * radius
+      );
+      
+      // Add fake soft shadow directly to cloudsGroup so it moves with the overall system
+      const shadow = new THREE.Mesh(cloudShadowGeo, cloudShadowMat);
+      shadow.rotation.x = -Math.PI / 2;
+      shadow.position.set(cloud.position.x, 0.5, cloud.position.z);
+      this.cloudsGroup.add(shadow);
+      
+      // Set some userData for animation
+      cloud.userData = {
+        speedX: 0,
+        speedZ: 0,
+        targetY: cloud.position.y,
+        bobPhase: Math.random() * Math.PI * 2,
+        shadowMesh: shadow
+      };
+
+      this.cloudsGroup.add(cloud);
+    }
+
+    // Sunset Horizon
+    const sunCanvas = document.createElement('canvas');
+    sunCanvas.width = 1024;
+    sunCanvas.height = 1024;
+    const sCtx = sunCanvas.getContext('2d')!;
+    sCtx.translate(512, 512);
+
+    // Glow
+    const grd = sCtx.createRadialGradient(0, 0, 50, 0, 0, 350);
+    grd.addColorStop(0, 'rgba(255, 230, 150, 1)');
+    grd.addColorStop(0.2, 'rgba(255, 120, 0, 1)');
+    grd.addColorStop(0.6, 'rgba(200, 40, 0, 0.8)');
+    grd.addColorStop(1, 'rgba(200, 40, 0, 0)');
+
+    sCtx.fillStyle = grd;
+    sCtx.beginPath();
+    sCtx.arc(0, 0, 350, Math.PI, Math.PI * 2);
+    sCtx.fill();
+
+    // Rays
+    for(let i=0; i<14; i++) {
+      sCtx.save();
+      sCtx.rotate(Math.PI + (i + 0.5) * (Math.PI / 14));
+      
+      const rayGrd = sCtx.createLinearGradient(120, 0, 500, 0);
+      rayGrd.addColorStop(0, 'rgba(255, 100, 0, 0.6)');
+      rayGrd.addColorStop(1, 'rgba(255, 50, 0, 0)');
+      sCtx.fillStyle = rayGrd;
+      
+      sCtx.beginPath();
+      sCtx.moveTo(120, -10);
+      sCtx.lineTo(120, 10);
+      sCtx.lineTo(500, 40);
+      sCtx.lineTo(500, -40);
+      sCtx.fill();
+      sCtx.restore();
+    }
+
+    const sunTex = new THREE.CanvasTexture(sunCanvas);
+    const sunMat = new THREE.MeshBasicMaterial({ 
+      map: sunTex, 
+      transparent: true, 
+      side: THREE.FrontSide, 
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      fog: false // Keep sun bright and crisp against the fog
+    });
+    
+    // Plane size. Center of plane is Y=0, canvas top half matches Plane Y>0.
+    const sunGeo = new THREE.PlaneGeometry(800, 800);
+    this.sunMesh = new THREE.Mesh(sunGeo, sunMat);
+    this.scene.add(this.sunMesh);
 
     this.setupCameraControls(container);
 
@@ -447,7 +605,7 @@ export class Renderer3D implements IRenderer {
       polygonOffsetUnits: -1,
     });
 
-    const roadWidth = 22;  // narrow streets — blocks are clearly visible between
+    const roadWidth = 14;  // narrower streets to cleanly separate parallel edges
     const Y_ROAD = 0.0;
 
     // Dash marking material
@@ -463,15 +621,12 @@ export class Renderer3D implements IRenderer {
     });
     const dashGeo_len = 7;
     const dashGeo = new THREE.PlaneGeometry(dashGeo_len, 1.2);
-    // 1. Visual Simplification: Snap close nodes to a grid for cleaner layout
+    // 1. Raw Node Positions mapped to 3D Space
     const visualPositions = new Map<string, THREE.Vector3>();
-    const snapGrid = 40;
 
     nodes.forEach(node => {
       const raw = this.latLonToWorld(node.lat, node.lon);
-      const sx = Math.round(raw.x / snapGrid) * snapGrid;
-      const sz = Math.round(raw.z / snapGrid) * snapGrid;
-      visualPositions.set(node.id, new THREE.Vector3(sx, 0, sz));
+      visualPositions.set(node.id, raw);
     });
 
     // Collect all snapped node positions for building exclusion check
@@ -482,22 +637,24 @@ export class Renderer3D implements IRenderer {
     (this as any)._visualPositions = visualPositions; // needed for road-aligned building placement
 
     const drawnEdges = new Set<string>();
-
     const drawnIntersections = new Set<string>();
-    const circleGeo = new THREE.CircleGeometry(roadWidth * 0.5, 12);
+    const circleGeo = new THREE.CircleGeometry(roadWidth * 0.5, 32);
+    const renderedDashes: Array<{midX: number, midZ: number, dirX: number, dirZ: number}> = [];
 
     nodes.forEach(node => {
       const p1 = visualPositions.get(node.id)!;
 
-      // ── ROUNDED CAP — drawn at ALL waypoints to ensure smooth corners
-      // even if a road just bends with 2 neighbors without crossing.
+      // ── ROUNDED CAP
       const iKey = `${p1.x},${p1.z}`;
       if (!drawnIntersections.has(iKey)) {
         drawnIntersections.add(iKey);
+        // Deterministic microscropic Y-offset to perfectly prevent Z-fighting with overlapping parallel nodes
+        const yOffset = ((Math.abs(p1.x + p1.z) * 1000) % 10) * 0.001; 
         const cap = new THREE.Mesh(circleGeo, roadMat);
         cap.rotation.x = -Math.PI / 2;
-        cap.position.set(p1.x, Y_ROAD + 0.02, p1.z);
+        cap.position.set(p1.x, Y_ROAD + yOffset, p1.z);
         cap.receiveShadow = true;
+        cap.castShadow = false; // Prevent shadow rings from the tiny hover
         this.streetsGroup.add(cap);
       }
 
@@ -513,32 +670,48 @@ export class Renderer3D implements IRenderer {
         const dx = p2.x - p1.x;
         const dz = p2.z - p1.z;
         const dist = Math.sqrt(dx * dx + dz * dz);
-        if (dist < 10) return;
+        if (dist < 0.1) return;
 
         const angle = Math.atan2(dz, dx);
         const midX = (p1.x + p2.x) / 2;
         const midZ = (p1.z + p2.z) / 2;
+        
+        // Microscopic deterministic offset to smoothly stack identical overlapping roads without flickering or hashing
+        const yOffset = ((Math.abs(midX + midZ) * 1000) % 10) * 0.002; 
 
-        // ── ROAD SEGMENT ─────────────────────────────────────────────────────
+        // ── ROAD SEGMENT 
         const road = new THREE.Mesh(new THREE.PlaneGeometry(dist, roadWidth), roadMat);
         road.rotation.x = -Math.PI / 2;
         road.rotation.z = -angle;
-        road.position.set(midX, Y_ROAD, midZ);
+        road.position.set(midX, Y_ROAD + yOffset, midZ);
         road.receiveShadow = true;
         road.castShadow = false;
         this.streetsGroup.add(road);
 
-        // ── DASHED MARKING ───────────────────────────────────────────────────
+        // ── DASHED MARKING 
+        const dirX = dx / dist;
+        const dirZ = dz / dist;
+
+        // Skip drawing dashes if another identical or very parallel dashed line already exists 
+        let skipDashes = false;
+        for (const d of renderedDashes) {
+          const distSq = (midX - d.midX) ** 2 + (midZ - d.midZ) ** 2;
+          if (distSq < 150) { // approx 12 units
+            const dot = Math.abs(dirX * d.dirX + dirZ * d.dirZ);
+            if (dot > 0.85) {
+              skipDashes = true;
+              break;
+            }
+          }
+        }
+
         const c1 = (node.neighbors.length === 2) ? 0 : 13;
         const c2 = (target.neighbors.length === 2) ? 0 : 13;
         
         const markDist = dist - c1 - c2;
-        if (markDist > 0) {
-          const dirX = dx / dist;
-          const dirZ = dz / dist;
+        if (markDist > 0 && !skipDashes) {
+          renderedDashes.push({ midX, midZ, dirX, dirZ });
           
-          // To keep spacing perfectly continuous across all road pieces,
-          // we align them mathematically across the global 3D space.
           let basisX = dirX;
           let basisZ = dirZ;
           if (basisX < 0 || (basisX === 0 && basisZ < 0)) {
@@ -546,12 +719,9 @@ export class Renderer3D implements IRenderer {
             basisZ = -basisZ;
           }
           
-          // 6 unit dash, 14 unit gap => 20 unit cycle (evenly distributed, not too tight)
           const cycleDist = dashGeo_len + 14;
-          
-          // Phase projection maps the 3D position to a 1D timeline
           const phase_p1 = p1.x * basisX + p1.z * basisZ;
-          const phaseRate = dirX * basisX + dirZ * basisZ; // Will be 1 or -1
+          const phaseRate = dirX * basisX + dirZ * basisZ;
           
           const t_start = c1;
           const t_end = dist - c2;
@@ -565,7 +735,6 @@ export class Renderer3D implements IRenderer {
             max_val = phase_p1 - t_start;
           }
           
-          // Find all multiples of the dash cycle that fall within this road segment
           const min_N = Math.ceil(min_val / cycleDist);
           const max_N = Math.floor(max_val / cycleDist);
           
@@ -579,8 +748,7 @@ export class Renderer3D implements IRenderer {
             const markMesh = new THREE.Mesh(dashGeo, dashMat);
             markMesh.rotation.x = -Math.PI / 2;
             markMesh.rotation.z = -angle;
-            // Lift Y slightly above Y_ROAD to completely prevent z-fighting
-            markMesh.position.set(dX, Y_ROAD + 0.1, dZ);
+            markMesh.position.set(dX, Y_ROAD + 0.1 + yOffset, dZ);
             this.streetsGroup.add(markMesh);
           }
         }
@@ -635,16 +803,25 @@ export class Renderer3D implements IRenderer {
     group1.scale.set(1.4, 1.4, 1.4);
 
     let count = 0;
-    const renderedPositions = new Set<string>();
+    const placedPositions: THREE.Vector3[] = [];
+    const minDotDistSq = 25 * 25; // Minimum 25 units distance between dots
 
     dots.forEach(dot => {
       if (!dot) return;
       const pos = visualPositions.get(dot.id) || this.latLonToWorld(dot.lat, dot.lon);
 
-      // Deduplicate visual positions so multiple dots at intersections don't overlap into a messy lantern
-      const posKey = `${Math.round(pos.x)},${Math.round(pos.z)}`;
-      if (renderedPositions.has(posKey)) return;
-      renderedPositions.add(posKey);
+      // Enforce a strict minimum distance so they don't look overcrowded
+      let tooClose = false;
+      for (let k = 0; k < placedPositions.length; k++) {
+        const dx = pos.x - placedPositions[k].x;
+        const dz = pos.z - placedPositions[k].z;
+        if (dx * dx + dz * dz < minDotDistSq) {
+          tooClose = true;
+          break;
+        }
+      }
+      if (tooClose) return;
+      placedPositions.push(pos);
 
       const isZero = (count % 2 === 0);
       count++;
@@ -659,6 +836,7 @@ export class Renderer3D implements IRenderer {
     this.buildBuildings3D();
     this.buildTrees3D();
     this.buildHomebase3D();
+    this.buildItems3D();
 
     this.isMapBuilt = true;
   }
@@ -727,23 +905,75 @@ export class Renderer3D implements IRenderer {
     pillar.position.set(pos.x, height / 2, pos.z);
     pillar.name = 'pillar';
 
-    // Add an inner blue core
-    const coreRadius = 1.5; // Much narrower core as requested (was 6)
-    const coreGeo = new THREE.CylinderGeometry(coreRadius, coreRadius, height, 16, 1, true);
-    const coreMat = new THREE.MeshBasicMaterial({
-      color: 0x0050ff,
-      transparent: true,
-      opacity: 0.2, // Set to 0.2 as requested
-      blending: THREE.AdditiveBlending,
+    // Replace inner blue core with flag and mast
+    const mastHeight = 55;
+    const mastRadius = 1.2;
+    const mastGeo = new THREE.CylinderGeometry(mastRadius, mastRadius, mastHeight, 16);
+    const mastMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.8, roughness: 0.3 });
+    const mast = new THREE.Mesh(mastGeo, mastMat);
+    mast.position.set(pos.x, mastHeight / 2, pos.z);
+    mast.castShadow = true;
+    mast.receiveShadow = true;
+    mast.name = 'mast';
+
+    // Create flag texture
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 340;
+    const ctx = canvas.getContext('2d')!;
+    
+    // Black background
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, 512, 340);
+    
+    // Add yellow border
+    ctx.strokeStyle = '#ffe600';
+    ctx.lineWidth = 15;
+    ctx.strokeRect(10, 10, 492, 320);
+
+    // Yellow Text
+    ctx.fillStyle = '#ffe600';
+    ctx.font = 'bold 80px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('vibe-man', 256, 170);
+
+    const flagTex = new THREE.CanvasTexture(canvas);
+    flagTex.anisotropy = 4;
+    flagTex.colorSpace = THREE.SRGBColorSpace;
+
+    const flagWidth = 26;
+    const flagHeight = 16;
+    const flagGeo = new THREE.PlaneGeometry(flagWidth, flagHeight, 15, 5);
+    const flagMat = new THREE.MeshStandardMaterial({
+      map: flagTex,
       side: THREE.DoubleSide,
-      depthWrite: false
+      roughness: 0.4,
+      metalness: 0.1
     });
-    const core = new THREE.Mesh(coreGeo, coreMat);
-    core.position.set(pos.x, height / 2, pos.z);
-    core.name = 'core';
+    const flag = new THREE.Mesh(flagGeo, flagMat);
+    
+    // Position flag so its left edge is attached to the mast
+    flag.position.set(pos.x + flagWidth / 2 + mastRadius, mastHeight - flagHeight / 2 - 2, pos.z);
+    flag.castShadow = true;
+    flag.receiveShadow = true;
+    flag.name = 'flag';
+
+    // Save initial vertices for animation
+    const posAttribute = flag.geometry.attributes.position;
+    const userDataPos = [];
+    for (let i = 0; i < posAttribute.count; i++) {
+      userDataPos.push(new THREE.Vector3().fromBufferAttribute(posAttribute, i));
+    }
+    flag.userData.initialPositions = userDataPos;
+    flag.userData.flagWidth = flagWidth;
 
     this.homebaseGroup.add(pillar);
-    this.homebaseGroup.add(core);
+    this.homebaseGroup.add(mast);
+    this.homebaseGroup.add(flag);
+
+    // Center the clouds above the homebase
+    this.cloudsGroup.position.set(pos.x, 0, pos.z);
   }
 
   private buildBuildings3D() {
@@ -767,6 +997,30 @@ export class Renderer3D implements IRenderer {
     const BUILD_D = 16;   // building depth (into the block)
     const SETBACK = 2;    // gap between road edge and building face
     const FACE_DIST = roadWidth / 2 + SETBACK + BUILD_D / 2; // road center → building center
+
+    const distToSegmentSq = (px: number, pz: number, ax: number, az: number, bx: number, bz: number) => {
+      const l2 = (ax - bx) ** 2 + (az - bz) ** 2;
+      if (l2 === 0) return (px - ax) ** 2 + (pz - az) ** 2;
+      let t = ((px - ax) * (bx - ax) + (pz - az) * (bz - az)) / l2;
+      t = Math.max(0, Math.min(1, t));
+      return (px - (ax + t * (bx - ax))) ** 2 + (pz - (az + t * (bz - az))) ** 2;
+    };
+
+    const segments: Array<{ax: number, az: number, bx: number, bz: number}> = [];
+    nodes.forEach(node => {
+      node.neighbors.forEach(nId => {
+        const edgeId = [node.id, nId].sort().join('-');
+        if (!drawnEdges.has(edgeId)) {
+          drawnEdges.add(edgeId);
+          const p1 = visualPositions.get(node.id);
+          const p2 = visualPositions.get(nId);
+          if (p1 && p2) segments.push({ ax: p1.x, az: p1.z, bx: p2.x, bz: p2.z });
+        }
+      });
+    });
+
+    drawnEdges.clear();
+    const safeDistSq = (FACE_DIST - 1.5) ** 2;
 
     nodes.forEach(node => {
       node.neighbors.forEach(nId => {
@@ -798,9 +1052,19 @@ export class Renderer3D implements IRenderer {
           const cz = p1.z + uz * t;
 
           for (const side of [1, -1]) {
-            const bHeight = 14 + Math.random() * 8; // 14–22 units (Stadtvillen: 3-4 floors)
             const bx = cx + px * FACE_DIST * side;
             const bz = cz + pz * FACE_DIST * side;
+
+            let overlap = false;
+            for (const seg of segments) {
+              if (distToSegmentSq(bx, bz, seg.ax, seg.az, seg.bx, seg.bz) < safeDistSq) {
+                overlap = true;
+                break;
+              }
+            }
+            if (overlap) continue;
+
+            const bHeight = 14 + Math.random() * 8; // 14–22 units (Stadtvillen: 3-4 floors)
 
             // ── BODY ─────────────────────────────────────────────────────────
             const wallColor = wallColors[Math.floor(Math.random() * wallColors.length)];
@@ -863,7 +1127,7 @@ export class Renderer3D implements IRenderer {
     });
   }
 
-  private updateItems3D() {
+  private buildItems3D() {
     this.itemsGroup.clear();
 
     const createCoinTex = (text: string, color: string, isEmoji: boolean) => {
@@ -899,6 +1163,7 @@ export class Renderer3D implements IRenderer {
     if (!(this as any)._powerTex) {
       (this as any)._powerTex = createCoinTex('</>', '#00ffcc', false);
       (this as any)._rocketTex = createCoinTex('🚀', '#ff3300', true);
+      (this as any)._gastroCaches = {};
     }
 
     const coinGeo = new THREE.CylinderGeometry(8, 8, 2, 32);
@@ -922,9 +1187,6 @@ export class Renderer3D implements IRenderer {
     });
     const rMats = [rMatSide, rMatFace, rMatFace];
 
-    const nowStr = performance.now() / 500;
-    const yFloat = 10 + Math.sin(performance.now() / 200) * 3;
-
     this.engine.getPowerItems().forEach(item => {
       if (!item) return;
       const pos = this.latLonToWorld(item.lat, item.lon);
@@ -934,8 +1196,12 @@ export class Renderer3D implements IRenderer {
       mesh.castShadow = true;
       group.add(mesh);
       group.position.copy(pos);
-      group.position.y = yFloat;
-      group.rotation.y = nowStr;
+      group.userData = { 
+        type: 'power', 
+        id: item.id, 
+        baseY: 10,
+        animOffset: Math.random() * Math.PI * 2
+      };
       this.itemsGroup.add(group);
     });
 
@@ -948,8 +1214,755 @@ export class Renderer3D implements IRenderer {
       mesh.castShadow = true;
       group.add(mesh);
       group.position.copy(pos);
-      group.position.y = yFloat;
-      group.rotation.y = nowStr;
+      group.userData = { 
+        type: 'rocket', 
+        id: item.id, 
+        baseY: 10,
+        animOffset: Math.random() * Math.PI * 2
+      };
+      this.itemsGroup.add(group);
+    });
+
+    const getGastroMat = (type: string) => {
+      const caches = (this as any)._gastroCaches;
+      if (caches[type]) return caches[type];
+
+      let icon = '🍽️';
+      if (type === 'burger') icon = '🍔';
+      else if (type === 'pizza') icon = '🍕';
+      else if (type === 'cafe') icon = '☕';
+      else if (type === 'kiosk') icon = '🏪';
+      else if (type === 'doner') icon = '🥙';
+      else if (type === 'asia') icon = '🍜';
+      else if (type === 'restaurant') icon = '🍝';
+
+      const canvas = document.createElement('canvas');
+      canvas.width = 128;
+      canvas.height = 128;
+      const ctx = canvas.getContext('2d')!;
+      
+      ctx.fillStyle = '#1a1a1a';
+      ctx.fillRect(8, 8, 112, 112);
+      ctx.strokeStyle = '#ff9900';
+      ctx.lineWidth = 12;
+      ctx.strokeRect(8, 8, 112, 112);
+      
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = '60px serif';
+      ctx.fillText(icon, 64, 68);
+      
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.anisotropy = 4;
+      const faceMat = new THREE.MeshStandardMaterial({
+        map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 1.0, roughness: 0.3
+      });
+      caches[type] = faceMat;
+      return faceMat;
+    };
+
+    const gastroGeo = new THREE.BoxGeometry(10, 10, 2);
+    const gastroSide = new THREE.MeshStandardMaterial({ color: 0xff9900, roughness: 0.4, metalness: 0.8 });
+    
+    // Doner spit geometries
+    const donerStickGeo = new THREE.CylinderGeometry(0.5, 0.5, 24, 8);
+    // Adding vertical segments (12) so we can bend the geometry
+    const donerMeatGeo = new THREE.CylinderGeometry(4.5, 3.0, 16, 16, 12);
+    
+    // Deform meat geometry to make it look chunky and irregular
+    const posAttribute = donerMeatGeo.attributes.position;
+    for (let i = 0; i < posAttribute.count; i++) {
+        const y = posAttribute.getY(i);
+        const x = posAttribute.getX(i);
+        const z = posAttribute.getZ(i);
+        // exclude top/bottom center vertices
+        if (x !== 0 || z !== 0) {
+            const angle = Math.atan2(z, x);
+            // Noise based on angle and height
+            const noise = Math.sin(angle * 4 + y * 1.5) * 0.4 + Math.cos(angle * 2 - y * 3) * 0.4;
+            posAttribute.setX(i, x + Math.cos(angle) * noise);
+            posAttribute.setZ(i, z + Math.sin(angle) * noise);
+        }
+    }
+    donerMeatGeo.computeVertexNormals();
+
+    const donerStickMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.8, roughness: 0.2 });
+    
+    // Dynamic cartoon texture generator for meat
+    const getDonerMeatMat = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 256;
+      const ctx = canvas.getContext('2d')!;
+
+      // Background color: reddish-brown meat base
+      ctx.fillStyle = '#a65646';
+      ctx.fillRect(0, 0, 256, 256);
+
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      // Draw horizontal wavy lines (fat/burnt layers and cartoon outlines)
+      const numLayers = 16;
+      for (let i = 0; i <= numLayers; i++) {
+        const yBase = (i / numLayers) * 256;
+        ctx.beginPath();
+        ctx.moveTo(0, yBase);
+        
+        const randomPhase = Math.random() * Math.PI * 2;
+        const isBlackLine = Math.random() > 0.5; // High chance of black lines for cel-shading
+        const colorVariation = Math.random() > 0.6 ? '#cc7766' : '#5c2d22'; // bright fat vs burnt meat
+        
+        ctx.strokeStyle = isBlackLine ? '#221411' : colorVariation;
+        ctx.lineWidth = isBlackLine ? 4 : 8;
+
+        for (let x = 0; x <= 256; x += 10) {
+          const y = yBase + Math.sin(x * 0.05 + randomPhase) * 10 + Math.cos(x * 0.15) * 6;
+          ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      tex.anisotropy = 4;
+      
+      return new THREE.MeshStandardMaterial({
+        map: tex, roughness: 0.9, metalness: 0.05
+      });
+    };
+    
+    const donerMeatMat = getDonerMeatMat();
+    // For cel-shaded look on the outside
+    const donerOutlineMat = new THREE.MeshBasicMaterial({ color: 0x0a0503, side: THREE.BackSide });
+
+    // Pizza geometries and materials
+    const pizzaGeo = new THREE.CylinderGeometry(8, 8, 1.5, 32);
+    const pizzaSideMat = new THREE.MeshStandardMaterial({ color: 0xc9a46b, roughness: 0.8 }); // Baked dough side
+    const pizzaBottomMat = new THREE.MeshStandardMaterial({ color: 0xba9256, roughness: 0.9 }); // Baked dough bottom
+    
+    const getPizzaTopMat = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 256; canvas.height = 256;
+      const ctx = canvas.getContext('2d')!;
+
+      // Crust edge (golden brown)
+      ctx.fillStyle = '#dbad67';
+      ctx.fillRect(0, 0, 256, 256);
+      
+      // Sauce (tomato red circle)
+      ctx.beginPath();
+      ctx.arc(128, 128, 115, 0, Math.PI * 2);
+      ctx.fillStyle = '#b33017';
+      ctx.fill();
+
+      // Cheese (melted yellow splotches)
+      ctx.beginPath();
+      ctx.arc(128, 128, 108, 0, Math.PI * 2);
+      ctx.fillStyle = '#ebd56e';
+      ctx.fill();
+
+      // Pepperoni slices
+      ctx.fillStyle = '#a12c2a';
+      for (let i = 0; i < 12; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const dist = Math.random() * 85;
+        ctx.beginPath();
+        ctx.arc(128 + Math.cos(angle)*dist, 128 + Math.sin(angle)*dist, 16, 0, Math.PI * 2);
+        ctx.fill();
+        // small darker rim
+        ctx.strokeStyle = '#7d201e';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+
+      // Basil / Oregano speckles
+      ctx.fillStyle = '#226b2d';
+      for (let i = 0; i < 30; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const dist = Math.random() * 100;
+        ctx.beginPath();
+        ctx.arc(128 + Math.cos(angle)*dist, 128 + Math.sin(angle)*dist, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.anisotropy = 4;
+      return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6, metalness: 0.1 });
+    };
+    const pizzaTopMat = getPizzaTopMat();
+    
+    // Steam particle material
+    const getSteamMat = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64; canvas.height = 64;
+      const ctx = canvas.getContext('2d')!;
+      const grad = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+      grad.addColorStop(0, 'rgba(255, 255, 255, 0.4)');
+      grad.addColorStop(0.5, 'rgba(255, 255, 255, 0.1)');
+      grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 64, 64);
+      return new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), transparent: true, depthWrite: false });
+    };
+    const steamMat = getSteamMat();
+    
+    // Cafe geometries
+    const cupGeo = new THREE.CylinderGeometry(5.5, 4, 10, 32, 1, true); // Open ended cup
+    const cupBottomGeo = new THREE.CircleGeometry(4.0, 32);
+    // At y=1.66 (approx 2/3 height up from -5 to 5), the radius is exactly 5.0
+    const coffeeGeo = new THREE.CircleGeometry(5.0, 32);
+    // Half an arc so it doesn't clip into the inside of the cup
+    const handleGeo = new THREE.TorusGeometry(3.0, 0.9, 16, 32, Math.PI);
+    const cupMat = new THREE.MeshStandardMaterial({ color: 0xfdfdfd, roughness: 0.1, metalness: 0.1, side: THREE.DoubleSide });
+    const coffeeMat = new THREE.MeshStandardMaterial({ color: 0x22110a, roughness: 0.8 }); // Darker coffee color
+    
+    // Kiosk geometries & materials
+    const kioskBaseGeo = new THREE.BoxGeometry(10, 8, 8);
+    const kioskWindowGeo = new THREE.BoxGeometry(8, 4, 0.5);
+    const kioskAwningGeo = new THREE.BoxGeometry(10, 0.5, 6);
+    
+    const kioskBaseMat = new THREE.MeshStandardMaterial({ color: 0xe0e0e0, roughness: 0.7, metalness: 0.2 });
+    const kioskWindowMat = new THREE.MeshStandardMaterial({ color: 0x223344, roughness: 0.1, metalness: 0.8 }); 
+
+    const getKioskAwningMat = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 256; canvas.height = 256;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = '#cc2222';
+      ctx.fillRect(0, 0, 256, 256);
+      ctx.fillStyle = '#ffffff';
+      for (let i = 0; i < 256; i += 64) {
+        ctx.fillRect(i, 0, 32, 256);
+      }
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      tex.anisotropy = 4;
+      return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.9, metalness: 0.1 });
+    };
+    const kioskAwningMat = getKioskAwningMat();
+
+    // Asia geometries & materials
+    const asiaBowlGeo = new THREE.CylinderGeometry(5.5, 3.5, 4, 32, 1, true); // Open ended
+    const asiaBowlBottomGeo = new THREE.CircleGeometry(3.5, 32);
+    // At y=0.66 (approx 2/3 height up from -2 to 2), radius is ~4.8
+    const asiaRiceGeo = new THREE.CircleGeometry(4.8, 32);
+    const asiaChopstickGeo = new THREE.CylinderGeometry(0.15, 0.15, 10, 8);
+    
+    // Blue ceramic bowl - a bit brighter China porcelain blue
+    const asiaBowlMat = new THREE.MeshStandardMaterial({ color: 0x0033aa, roughness: 0.1, metalness: 0.6, side: THREE.DoubleSide });
+    // Light wood chopsticks
+    const asiaChopstickMat = new THREE.MeshStandardMaterial({ color: 0xead9a2, roughness: 0.8 });
+    
+    const getAsiaRiceMat = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 256; canvas.height = 256;
+      const ctx = canvas.getContext('2d')!;
+      
+      // Base layer
+      ctx.fillStyle = '#fdfdfd'; 
+      ctx.fillRect(0, 0, 256, 256);
+      
+      // Rice grains (small overlapping white/light-grey strokes)
+      ctx.lineCap = 'round';
+      for (let i = 0; i < 1200; i++) {
+        ctx.beginPath();
+        const startX = Math.random() * 256;
+        const startY = Math.random() * 256;
+        const length = 3 + Math.random() * 5;
+        const angle = Math.random() * Math.PI * 2;
+        ctx.moveTo(startX, startY);
+        ctx.strokeStyle = Math.random() > 0.8 ? '#f2f2f2' : (Math.random() > 0.9 ? '#e6e6e6' : '#ffffff'); 
+        ctx.lineWidth = 3 + Math.random() * 2;
+        ctx.lineTo(startX + Math.cos(angle) * length, startY + Math.sin(angle) * length);
+        ctx.stroke();
+      }
+      
+      // Small black dots (black sesame seeds)
+      ctx.fillStyle = '#222222';
+      for (let i = 0; i < 30; i++) {
+        ctx.beginPath();
+        ctx.arc(Math.random() * 256, Math.random() * 256, 1.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      
+      // A little bit of garnish (Green onions)
+      ctx.fillStyle = '#3a8128';
+      for (let i = 0; i < 40; i++) {
+        ctx.beginPath();
+        ctx.arc(Math.random() * 256, Math.random() * 256, 1.5 + Math.random() * 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      tex.anisotropy = 4;
+      return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.9, metalness: 0.0 });
+    };
+    const asiaRiceMat = getAsiaRiceMat();
+
+    // Burger geometries & materials
+    const burgerBunBottomGeo = new THREE.CylinderGeometry(5, 5, 2, 32);
+    const burgerPattyGeo = new THREE.CylinderGeometry(5.2, 5.2, 1.5, 32);
+    const burgerCheeseGeo = new THREE.BoxGeometry(5.5, 0.2, 5.5);
+    const burgerTopGeo = new THREE.SphereGeometry(5, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2);
+    
+    const bunMat = new THREE.MeshStandardMaterial({ color: 0xd4a373, roughness: 0.8, metalness: 0.1 });
+    const pattyMat = new THREE.MeshStandardMaterial({ color: 0x3d1f14, roughness: 0.9, metalness: 0.0 });
+    const cheeseMat = new THREE.MeshStandardMaterial({ color: 0xffd700, roughness: 0.6, metalness: 0.2 });
+    const lettuceMat = new THREE.MeshStandardMaterial({ color: 0x228b22, roughness: 0.9, metalness: 0.0 });
+
+    const getBunTopMat = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 256; canvas.height = 128; // Rectangular since it wraps around sphere tip
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = '#d4a373';
+      ctx.fillRect(0, 0, 256, 128);
+      // Sesame seeds
+      ctx.fillStyle = '#f5deb3';
+      for (let i = 0; i < 100; i++) {
+        const x = Math.random() * 256;
+        const y = Math.random() * 128;
+        ctx.beginPath();
+        ctx.ellipse(x, y, 2, 4, Math.random() * Math.PI, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      const tex = new THREE.CanvasTexture(canvas);
+      return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.8, metalness: 0.1 });
+    };
+    const bunTopMat = getBunTopMat();
+
+    // Restaurant geometries & materials
+    const plateGeo = new THREE.CylinderGeometry(5.5, 5.0, 0.4, 32);
+    const steakGeo = new THREE.CylinderGeometry(3.6, 3.6, 1.2, 16);
+    const glassBaseGeo = new THREE.CylinderGeometry(1.5, 1.5, 0.2, 16);
+    const glassStemGeo = new THREE.CylinderGeometry(0.12, 0.12, 5.5, 8);
+    const glassBowlGeo = new THREE.CylinderGeometry(1.6, 0.1, 4.0, 12, 1, true);
+    const champagneGeo = new THREE.CylinderGeometry(1.4, 0.1, 3.5, 12);
+    
+    const plateMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.1 });
+    const steakMat = new THREE.MeshStandardMaterial({ color: 0x8b2222, roughness: 0.8 }); // Reddish meat color
+    const glassMat = new THREE.MeshStandardMaterial({ color: 0xaaffff, transparent: true, opacity: 0.3, roughness: 0.0, metalness: 0.5, side: THREE.DoubleSide });
+    const champagneMat = new THREE.MeshStandardMaterial({ color: 0xffe135, transparent: true, opacity: 0.8 });
+
+    const getSteakTopMat = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 256; canvas.height = 256;
+      const ctx = canvas.getContext('2d')!;
+      
+      // Fat/Rim base
+      ctx.fillStyle = '#fce4ec'; 
+      ctx.fillRect(0, 0, 256, 256);
+      
+      // Meat shape
+      ctx.fillStyle = '#a02020';
+      ctx.beginPath();
+      ctx.ellipse(128, 128, 110, 90, 0.2, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // The "Eye" of fat / Bone
+      ctx.fillStyle = '#fefefe';
+      ctx.beginPath();
+      const bx = 180, by = 100;
+      ctx.arc(bx, by, 15, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Fat veins
+      ctx.strokeStyle = '#fefefe';
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      // Vein to top
+      ctx.moveTo(bx, by);
+      ctx.lineTo(bx + 20, by - 60);
+      // Vein to center
+      ctx.moveTo(bx, by);
+      ctx.lineTo(bx - 80, by + 40);
+      // Vein to bottom
+      ctx.moveTo(bx, by);
+      ctx.lineTo(bx + 10, by + 80);
+      ctx.stroke();
+      
+      // Central bone dot
+      ctx.fillStyle = '#f8bbd0';
+      ctx.beginPath();
+      ctx.arc(bx, by, 6, 0, Math.PI * 2);
+      ctx.fill();
+      
+      const tex = new THREE.CanvasTexture(canvas);
+      return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6 });
+    };
+    const steakTopMat = getSteakTopMat();
+
+    this.engine.getGastronomes().forEach(item => {
+      if (!item) return;
+      const pos = this.latLonToWorld(item.lat, item.lon);
+      const group = new THREE.Group();
+      
+      const createTextSprite = (text: string) => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d')!;
+        ctx.font = 'bold 48px sans-serif';
+        const textWidth = ctx.measureText(text).width;
+        
+        // Pad canvas dynamically
+        canvas.width = Math.max(textWidth + 40, 64);
+        canvas.height = 128; // Needs adequate height
+        
+        ctx.font = 'bold 48px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        
+        // Text Shadow / Outline
+        ctx.lineWidth = 10;
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = '#000000';
+        ctx.strokeText(text, canvas.width / 2, 64);
+        
+        ctx.fillStyle = '#ffe600'; // Yellow text
+        ctx.fillText(text, canvas.width / 2, 64);
+        
+        const tex = new THREE.CanvasTexture(canvas);
+        const spriteMat = new THREE.SpriteMaterial({ map: tex, sizeAttenuation: true });
+        const sprite = new THREE.Sprite(spriteMat);
+        // Correct aspect ratio so text isn't squeezed, using world-scale units (much smaller now)
+        const ratio = canvas.width / canvas.height;
+        sprite.scale.set(7.5 * ratio, 7.5, 1);
+        return sprite;
+      };
+
+      if (item.type === 'doner') {
+        const stick = new THREE.Mesh(donerStickGeo, donerStickMat);
+        const meatGroup = new THREE.Group();
+        const meat = new THREE.Mesh(donerMeatGeo, donerMeatMat);
+        const outline = new THREE.Mesh(donerMeatGeo, donerOutlineMat);
+        outline.scale.set(1.05, 1.05, 1.05); // slightly larger, inverted normals
+        
+        meat.castShadow = true;
+        stick.castShadow = true;
+        
+        meatGroup.add(meat);
+        meatGroup.add(outline);
+        
+        group.add(stick);
+        group.add(meatGroup);
+        
+        // Give it a floating name tag
+        const nameNode = createTextSprite(item.name);
+        nameNode.position.set(0, 16, 0); // Above the doner
+        group.add(nameNode);
+        
+        group.position.copy(pos);
+        group.userData = { 
+          type: 'gastro',
+          gastroType: 'doner',
+          id: item.id, 
+          baseY: 12.5, // Half pacman size ~24 height -> y ~12
+          animOffset: pos.x / 300,
+          bobSpeed: 150 + Math.random() * 100 
+        };
+      } else if (item.type === 'pizza') {
+        const pzMesh = new THREE.Mesh(pizzaGeo, [pizzaSideMat, pizzaTopMat, pizzaBottomMat]);
+        pzMesh.castShadow = true;
+        pzMesh.rotation.x = Math.PI / 6; // Tilt it so you can see the top nicely
+        group.add(pzMesh);
+        
+        // Steam particles
+        const steamGroup = new THREE.Group();
+        for (let i = 0; i < 3; i++) {
+           const sprite = new THREE.Sprite(steamMat.clone());
+           sprite.scale.set(8, 8, 1);
+           sprite.userData.phase = i * (Math.PI * 2 / 3);
+           steamGroup.add(sprite);
+        }
+        steamGroup.name = "steamGroup";
+        group.add(steamGroup);
+
+        // Name tag
+        const nameNode = createTextSprite(item.name);
+        nameNode.position.set(0, 18, 0); // Above the pizza
+        group.add(nameNode);
+        
+        group.position.copy(pos);
+        group.userData = { 
+          type: 'gastro',
+          gastroType: 'pizza',
+          id: item.id, 
+          baseY: 10,
+          animOffset: pos.x / 300,
+          bobSpeed: 250 + Math.random() * 200 
+        };
+      } else if (item.type === 'cafe') {
+        const cfGroup = new THREE.Group();
+        
+        const cup = new THREE.Mesh(cupGeo, cupMat);
+        cup.castShadow = true;
+        cfGroup.add(cup);
+        
+        const bottom = new THREE.Mesh(cupBottomGeo, cupMat);
+        bottom.rotation.x = Math.PI / 2;
+        bottom.position.y = -5;
+        cfGroup.add(bottom);
+        
+        const coffee = new THREE.Mesh(coffeeGeo, coffeeMat);
+        coffee.rotation.x = -Math.PI / 2;
+        coffee.position.y = 1.66; // 2/3 filled
+        cfGroup.add(coffee);
+        
+        const handle = new THREE.Mesh(handleGeo, cupMat);
+        handle.rotation.z = -Math.PI / 2; // Orient half-arc outwards
+        handle.position.set(4.7, 0, 0); // Attach to the outer wall
+        handle.castShadow = true;
+        cfGroup.add(handle);
+        
+        cfGroup.rotation.x = Math.PI / 8; // Tilt cup nicely so user sees coffee
+        group.add(cfGroup);
+        
+        // Steam particles
+        const steamGroup = new THREE.Group();
+        for (let i = 0; i < 2; i++) {
+           const sprite = new THREE.Sprite(steamMat.clone());
+           sprite.scale.set(6, 6, 1);
+           sprite.userData.phase = i * Math.PI;
+           steamGroup.add(sprite);
+        }
+        steamGroup.name = "steamGroup";
+        steamGroup.position.y = 5;
+        group.add(steamGroup);
+
+        // Name tag
+        const nameNode = createTextSprite(item.name);
+        nameNode.position.set(0, 18, 0); 
+        group.add(nameNode);
+        
+        group.position.copy(pos);
+        group.userData = { 
+          type: 'gastro',
+          gastroType: 'cafe',
+          id: item.id, 
+          baseY: 10,
+          animOffset: pos.x / 300,
+          bobSpeed: 250 + Math.random() * 200 
+        };
+      } else if (item.type === 'kiosk') {
+        const kGroup = new THREE.Group();
+        
+        const base = new THREE.Mesh(kioskBaseGeo, kioskBaseMat);
+        base.castShadow = true;
+        kGroup.add(base);
+        
+        const win = new THREE.Mesh(kioskWindowGeo, kioskWindowMat);
+        win.position.set(0, 1, 4.01); // Stick out the front +Z
+        kGroup.add(win);
+        
+        const awning = new THREE.Mesh(kioskAwningGeo, kioskAwningMat);
+        awning.position.set(0, 4.25, 3.5); // Top front
+        awning.rotation.x = Math.PI / 8; // Slanted down
+        awning.castShadow = true;
+        kGroup.add(awning);
+        
+        group.add(kGroup);
+        
+        // Name tag
+        const nameNode = createTextSprite(item.name);
+        nameNode.position.set(0, 14, 0); 
+        group.add(nameNode);
+        
+        group.position.copy(pos);
+        group.userData = { 
+          type: 'gastro',
+          gastroType: 'kiosk',
+          id: item.id, 
+          baseY: 8,
+          animOffset: pos.x / 300,
+          bobSpeed: 250 + Math.random() * 200 
+        };
+      } else if (item.type === 'asia') {
+        const aGroup = new THREE.Group();
+        
+        const bowl = new THREE.Mesh(asiaBowlGeo, asiaBowlMat);
+        bowl.castShadow = true;
+        aGroup.add(bowl);
+        
+        const bowlBottom = new THREE.Mesh(asiaBowlBottomGeo, asiaBowlMat);
+        bowlBottom.rotation.x = Math.PI / 2;
+        bowlBottom.position.y = -2;
+        aGroup.add(bowlBottom);
+        
+        const rice = new THREE.Mesh(asiaRiceGeo, asiaRiceMat);
+        rice.rotation.x = -Math.PI / 2;
+        rice.position.y = 0.66; // 2/3 filled inside the 4-high bowl
+        aGroup.add(rice);
+        
+        const chopstick1 = new THREE.Mesh(asiaChopstickGeo, asiaChopstickMat);
+        chopstick1.position.set(1.5, 2.0, 0.5); // Sunk into rice (~0.66 is rice surface)
+        chopstick1.rotation.set(0.3, 0.3, 0.2);
+        chopstick1.castShadow = true;
+        aGroup.add(chopstick1);
+        
+        const chopstick2 = new THREE.Mesh(asiaChopstickGeo, asiaChopstickMat);
+        chopstick2.position.set(2.0, 2.2, 1.0);
+        chopstick2.rotation.set(0.4, 0.2, 0.15);
+        chopstick2.castShadow = true;
+        aGroup.add(chopstick2);
+        
+        aGroup.rotation.x = Math.PI / 10;
+        group.add(aGroup);
+        
+        // Steam particles
+        const steamGroup = new THREE.Group();
+        for (let i = 0; i < 2; i++) {
+           const sprite = new THREE.Sprite(steamMat.clone());
+           sprite.scale.set(7, 7, 1);
+           sprite.userData.phase = i * Math.PI;
+           steamGroup.add(sprite);
+        }
+        steamGroup.name = "steamGroup";
+        steamGroup.position.y = 3;
+        group.add(steamGroup);
+
+        // Name tag
+        const nameNode = createTextSprite(item.name);
+        nameNode.position.set(0, 16, 0); 
+        group.add(nameNode);
+        
+        group.position.copy(pos);
+        group.userData = { 
+          type: 'gastro',
+          gastroType: 'asia',
+          id: item.id, 
+          baseY: 9,
+          animOffset: pos.x / 300,
+          bobSpeed: 250 + Math.random() * 200 
+        };
+      } else if (item.type === 'burger') {
+        const bGroup = new THREE.Group();
+        
+        // Bottom Bun
+        const bottomBun = new THREE.Mesh(burgerBunBottomGeo, bunMat);
+        bottomBun.position.y = 0.5;
+        bottomBun.castShadow = true;
+        bGroup.add(bottomBun);
+        
+        // Patty
+        const patty = new THREE.Mesh(burgerPattyGeo, pattyMat);
+        patty.position.y = 2.0;
+        patty.castShadow = true;
+        bGroup.add(patty);
+        
+        // Lettuce (simplified as another thin disc/box for now)
+        const lettuce = new THREE.Mesh(new THREE.CylinderGeometry(5.4, 5.4, 0.4, 32), lettuceMat);
+        lettuce.position.y = 2.8;
+        bGroup.add(lettuce);
+        
+        // Cheese
+        const cheese = new THREE.Mesh(burgerCheeseGeo, cheeseMat);
+        cheese.position.y = 3.1;
+        cheese.rotation.y = Math.PI / 4; // Rotated
+        bGroup.add(cheese);
+        
+        // Top Bun
+        const topBun = new THREE.Mesh(burgerTopGeo, bunTopMat);
+        topBun.position.y = 3.2;
+        topBun.castShadow = true;
+        bGroup.add(topBun);
+        
+        bGroup.rotation.x = Math.PI / 10;
+        group.add(bGroup);
+
+        // Name tag
+        const nameNode = createTextSprite(item.name);
+        nameNode.position.set(0, 15, 0); 
+        group.add(nameNode);
+        
+        group.position.copy(pos);
+        group.userData = { 
+          type: 'gastro',
+          gastroType: 'burger',
+          id: item.id, 
+          baseY: 9,
+          animOffset: pos.x / 300,
+          bobSpeed: 250 + Math.random() * 200 
+        };
+      } else if (item.type === 'restaurant') {
+        const rGroup = new THREE.Group();
+        
+        // Plate
+        const plate = new THREE.Mesh(plateGeo, plateMat);
+        plate.position.y = -2;
+        plate.castShadow = true;
+        rGroup.add(plate);
+        
+        // Steak
+        const steak = new THREE.Mesh(steakGeo, [steakMat, steakTopMat, steakMat]);
+        steak.scale.set(1.15, 1, 1); // Only slightly oval for Ribeye look
+        steak.position.set(0.2, -1.2, 0); 
+        steak.rotation.y = Math.PI / 6;
+        steak.castShadow = true;
+        rGroup.add(steak);
+        
+        // Taller Champagne Glas next to the plate
+        const glass = new THREE.Group();
+        const base = new THREE.Mesh(glassBaseGeo, glassMat);
+        base.position.y = -2.1;
+        glass.add(base);
+        
+        const stem = new THREE.Mesh(glassStemGeo, glassMat);
+        stem.position.y = 0.6;
+        glass.add(stem);
+        
+        const bowl = new THREE.Mesh(glassBowlGeo, glassMat);
+        bowl.position.y = 5.3;
+        glass.add(bowl);
+        
+        const liquid = new THREE.Mesh(champagneGeo, champagneMat);
+        liquid.position.y = 5.0;
+        glass.add(liquid);
+        
+        glass.position.set(6.5, 0, -3.5); // Beside the plate
+        rGroup.add(glass);
+        
+        // No tilt (perfectly level with the ground)
+        rGroup.rotation.x = 0;
+        rGroup.rotation.z = 0;
+        group.add(rGroup);
+
+        // Name tag
+        const nameNode = createTextSprite(item.name);
+        nameNode.position.set(0, 15, 0); 
+        group.add(nameNode);
+        
+        group.position.copy(pos);
+        group.userData = { 
+          type: 'gastro',
+          gastroType: 'restaurant',
+          id: item.id, 
+          baseY: 9,
+          animOffset: pos.x / 300,
+          bobSpeed: 300 + Math.random() * 250 
+        };
+      } else {
+        const faceMat = getGastroMat(item.type);
+        const mesh = new THREE.Mesh(gastroGeo, [gastroSide, gastroSide, gastroSide, gastroSide, faceMat, faceMat]);
+        mesh.castShadow = true;
+        group.add(mesh);
+        
+        const nameNode = createTextSprite(item.name);
+        nameNode.position.set(0, 14, 0); 
+        group.add(nameNode);
+        
+        group.position.copy(pos);
+        group.userData = { 
+          type: 'gastro', 
+          gastroType: 'other',
+          id: item.id, 
+          baseY: 8,
+          animOffset: pos.x / 300,
+          bobSpeed: 200 + Math.random() * 200 
+        };
+      }
       this.itemsGroup.add(group);
     });
   }
@@ -968,6 +1981,44 @@ export class Renderer3D implements IRenderer {
       if (pillar) {
         pillar.scale.set(pulse, 1, pulse);
       }
+
+      const flag = this.homebaseGroup.getObjectByName('flag') as THREE.Mesh;
+      if (flag && flag.userData.initialPositions) {
+        const posAttribute = flag.geometry.attributes.position;
+        const initials = flag.userData.initialPositions;
+        const fWidth = flag.userData.flagWidth || 26;
+        for (let i = 0; i < posAttribute.count; i++) {
+          const initV = initials[i];
+          // Local x goes from -fWidth/2 to +fWidth/2. 
+          // The left edge is -fWidth/2, which is attached to the mast.
+          const xDist = initV.x + (fWidth / 2); 
+          
+          // Add a flutter wave based on time and distance from mast
+          const wave = Math.sin(_now / 150 - xDist * 0.3) * (xDist * 0.15);
+          
+          posAttribute.setZ(i, initV.z + wave);
+        }
+        posAttribute.needsUpdate = true;
+        flag.geometry.computeVertexNormals();
+      }
+    }
+
+    // Update Clouds
+    if (this.cloudsGroup.children.length > 0) {
+      this.cloudsGroup.children.forEach((cloud) => {
+        // Only gentle bobbing up and down, no sideways drift
+        cloud.position.y = cloud.userData.targetY + Math.sin(_now / 1500 + cloud.userData.bobPhase) * 10;
+        
+        // Sync shadow position
+        if (cloud.userData.shadowMesh) {
+          const sMesh = cloud.userData.shadowMesh as THREE.Mesh;
+          sMesh.position.x = cloud.position.x;
+          sMesh.position.z = cloud.position.z;
+          // Scale shadow slightly as the cloud bobs up and down (fake perspective)
+          const sScale = 1.0 - (cloud.position.y - cloud.userData.targetY) * 0.005;
+          sMesh.scale.set(sScale, sScale, 1);
+        }
+      });
     }
 
     // Update Dots (visibility and rotation)
@@ -983,6 +2034,69 @@ export class Renderer3D implements IRenderer {
         dotMesh.rotation.y = _now / 500 + parseFloat(dotMesh.userData.hash || 0) * 0.5;
       } else {
         dotMesh.visible = false;
+      }
+    });
+
+    // Animate and cull Items (Power, Rocket, Gastro)
+    const powerIds = new Set(this.engine.getPowerItems().map(i => i.id));
+    const rocketIds = new Set(this.engine.getRocketItems().map(i => i.id));
+    
+    this.itemsGroup.children.forEach((group: any) => {
+      const u = group.userData;
+      if (!u || !u.type) return;
+
+      // Unrender if collected
+      if (u.type === 'power' && !powerIds.has(u.id)) {
+        group.visible = false;
+        return;
+      }
+      if (u.type === 'rocket' && !rocketIds.has(u.id)) {
+        group.visible = false;
+        return;
+      }
+      
+      if (!group.visible) group.visible = true; // reset just in case
+
+      // Animate rotation and hovering
+      const timeVal = _now / 500;
+      if (u.type === 'gastro') {
+         if (u.gastroType === 'doner') {
+           // Doner rotates faster and doesn't bob up and down, it just stays anchored and spins
+           group.rotation.y = timeVal * 1.5 + u.animOffset;
+           group.position.y = u.baseY + Math.sin((_now / (u.bobSpeed || 300)) + u.animOffset) * 1.0; // Döner very subtle bobbing
+         } else if (u.gastroType === 'pizza' || u.gastroType === 'cafe' || u.gastroType === 'asia' || u.gastroType === 'burger') {
+           // These rotate slowly and hover
+           group.rotation.y = timeVal * 0.4 + u.animOffset;
+           group.position.y = u.baseY + Math.sin((_now / (u.bobSpeed || 300)) + u.animOffset) * 2;
+         } else if (u.gastroType === 'restaurant') {
+           // Restaurant does NOT rotate, only hovers
+           group.position.y = u.baseY + Math.sin((_now / (u.bobSpeed || 300)) + u.animOffset) * 2;
+           
+           // Animate steam particles
+           const steamGroup = group.getObjectByName("steamGroup");
+           if (steamGroup) {
+              const isSmall = u.gastroType === 'cafe' || u.gastroType === 'asia';
+              steamGroup.children.forEach((steamSp: any) => {
+                  const progress = ((_now / (isSmall ? 2500 : 2000)) + steamSp.userData.phase / (Math.PI*2)) % 1; 
+                  steamSp.position.set(
+                    Math.sin((_now/400) + steamSp.userData.phase) * (isSmall ? 1.5 : 3), 
+                    -1 + progress * (isSmall ? 10 : 14), 
+                    Math.cos((_now/500) + steamSp.userData.phase) * (isSmall ? 1.5 : 3)
+                  );
+                  const sScale = (isSmall ? 3 : 5) + progress * (isSmall ? 6 : 8);
+                  steamSp.scale.set(sScale, sScale, 1);
+                  (steamSp.material as THREE.SpriteMaterial).opacity = Math.sin(progress * Math.PI) * (isSmall ? 0.6 : 0.8);
+              });
+              // Steam group must be counter-rotated so steam rises straight up regardless of rotation
+              steamGroup.rotation.y = -group.rotation.y;
+           }
+         } else {
+           group.rotation.y = timeVal * 0.5 + u.animOffset;
+           group.position.y = u.baseY + Math.sin((_now / (u.bobSpeed || 300)) + u.animOffset) * 2;
+         }
+      } else {
+         group.rotation.y = timeVal + u.animOffset;
+         group.position.y = u.baseY + Math.sin((_now / (u.bobSpeed || 200)) + u.animOffset) * 3;
       }
     });
 
@@ -1038,6 +2152,16 @@ export class Renderer3D implements IRenderer {
         this.dirLight.target.position.set(px, 0, pz);
         this.dirLight.target.updateMatrixWorld();
         this.dirLight.shadow.camera.updateProjectionMatrix();
+
+        if (this.sunMesh) {
+          // Light direction vector on XZ is (800, 400). Distance = 894.427
+          // The shadows are cast away from light, so the source (sun) must be exactly in the +800, +400 direction
+          const dist = 3500;
+          const sx = px + (800 / 894.427) * dist;
+          const sz = pz + (400 / 894.427) * dist;
+          this.sunMesh.position.set(sx, 0, sz);
+          this.sunMesh.lookAt(px, 0, pz);
+        }
       }
 
       // Rotate Pacman to face movement direction.
@@ -1177,9 +2301,6 @@ export class Renderer3D implements IRenderer {
         this.ghostMeshes.delete(key);
       }
     }
-
-    // Update Items
-    this.updateItems3D();
 
     // Update active Rockets
     const activeRockets = new Set();

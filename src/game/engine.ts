@@ -110,6 +110,14 @@ export interface Tree {
   lon: number;
 }
 
+export interface Gastronomy {
+  id: string;
+  lat: number;
+  lon: number;
+  type: string;
+  name: string;
+}
+
 export interface GameState {
   score: number;
   lives: number;
@@ -125,6 +133,7 @@ export class GameEngine {
   private rocketItems: Set<string> = new Set(); // Node IDs for rocket items
   private buildings: Building[] = [];
   private trees: Tree[] = [];
+  private gastronomes: Gastronomy[] = [];
   private pacmanNodeId: string = "";
   private initialPacmanNodeId: string = "";
   private state: GameState = { score: 0, lives: 3, isGameOver: false, powerUpActive: false, powerUpEndTime: 0 };
@@ -140,6 +149,7 @@ export class GameEngine {
     this.rocketItems.clear();
     this.buildings = [];
     this.trees = [];
+    this.gastronomes = [];
 
     // 1. Collect all nodes from the ways we care about
     const wayElements = osmData.elements.filter((e: any) => e.type === 'way');
@@ -499,5 +509,70 @@ export class GameEngine {
 
   public getTrees() {
     return this.trees;
+  }
+
+  private getDistSquaredToSegment(x: number, y: number, x1: number, y1: number, x2: number, y2: number) {
+    const A = x - x1;
+    const B = y - y1;
+    const C = x2 - x1;
+    const D = y2 - y1;
+
+    const dot = A * C + B * D;
+    const len_sq = C * C + D * D;
+    let param = -1;
+    if (len_sq !== 0) param = dot / len_sq;
+
+    let xx, yy;
+
+    if (param < 0) {
+      xx = x1;
+      yy = y1;
+    } else if (param > 1) {
+      xx = x2;
+      yy = y2;
+    } else {
+      xx = x1 + param * C;
+      yy = y1 + param * D;
+    }
+
+    const dx = x - xx;
+    const dy = y - yy;
+    return dx * dx + dy * dy;
+  }
+
+  public setGastronomes(data: Gastronomy[]) {
+    // Filter to only those near walkable streets (within ~50 meters = ~0.00045 degrees => squared = 0.0000002)
+    const thresholdSq = 0.00000025; 
+    
+    // Collect all edges to avoid redundant segment processing
+    const edges: Array<{lat1: number, lon1: number, lat2: number, lon2: number}> = [];
+    const drawnEdges = new Set<string>();
+    this.nodes.forEach(node => {
+      node.neighbors.forEach(nId => {
+         const edgeId = [node.id, nId].sort().join('-');
+         if (!drawnEdges.has(edgeId)) {
+            drawnEdges.add(edgeId);
+            const nNode = this.nodes.get(nId);
+            if (nNode) {
+               edges.push({ lat1: node.lat, lon1: node.lon, lat2: nNode.lat, lon2: nNode.lon });
+            }
+         }
+      })
+    });
+
+    this.gastronomes = data.filter(g => {
+        let minSq = Infinity;
+        for (const edge of edges) {
+           const sq = this.getDistSquaredToSegment(g.lat, g.lon, edge.lat1, edge.lon1, edge.lat2, edge.lon2);
+           if (sq < minSq) minSq = sq;
+        }
+        return minSq <= thresholdSq;
+    });
+
+    console.log(`Filtered gastronomes near walkable roads: ${this.gastronomes.length} / ${data.length}`);
+  }
+
+  public getGastronomes() {
+    return this.gastronomes;
   }
 }

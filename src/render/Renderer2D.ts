@@ -77,6 +77,7 @@ export class Renderer2D implements IRenderer {
     this.drawDots();
     this.drawPowerItems();
     this.drawRocketItems();
+    this.drawGastronomy();
     this.drawFireTrail();
     this.drawRockets();
     this.drawGhosts();
@@ -368,6 +369,45 @@ export class Renderer2D implements IRenderer {
       const pulse = Math.sin(performance.now() / 200) * 5 + 5;
       ctx.shadowColor = '#ff3300';
       ctx.shadowBlur = pulse;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  private drawGastronomy() {
+    const items = this.engine.getGastronomes();
+    const ctx = this.ctx;
+    const size = 20;
+
+    ctx.save();
+    for (const item of items) {
+      if (!item) continue;
+      const p = this.toPoint(item.lat, item.lon);
+
+      ctx.beginPath();
+      ctx.rect(p.x - size/2, p.y - size/2, size, size);
+      ctx.fillStyle = '#1a1a1a';
+      ctx.strokeStyle = '#ff9900';
+      ctx.lineWidth = 2;
+      ctx.fill();
+      ctx.stroke();
+
+      let icon = '🍽️';
+      if (item.type === 'fast_food') icon = '🍔';
+      else if (item.type === 'pizza') icon = '🍕';
+      else if (item.type === 'cafe') icon = '☕';
+      else if (item.type === 'kiosk') icon = '🏪';
+      else if (item.type === 'doner') icon = '🥙';
+      else if (item.type === 'asia') icon = '🍜';
+      else if (item.type === 'restaurant') icon = '🍝';
+
+      ctx.font = '14px serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(icon, p.x, p.y + 1);
+
+      ctx.shadowColor = '#ff9900';
+      ctx.shadowBlur = 5;
       ctx.stroke();
     }
     ctx.restore();

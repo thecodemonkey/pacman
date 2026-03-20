@@ -260,6 +260,10 @@ function applyTheme(targetTheme: 'street' | 'pacman' | 'satellite' | '3d') {
       renderer = new Renderer2D(engine);
       renderer.init(document.getElementById('map')!);
       renderer.bindMap(map, canvas, ctx);
+      // Immediately center the map on Pac-Man so we don't look at the homebase
+      if (pacLatLng) {
+        map.setView(pacLatLng, map.getZoom(), { animate: false });
+      }
   }
 
   currentTheme = targetTheme;
@@ -329,8 +333,21 @@ async function fetchNearbyStreets(lat: number, lon: number, retries = 3) {
     const cachedResponse = await fetch(cacheUrl);
     if (cachedResponse.ok) {
       console.log(`Loaded cached city data: ${cacheUrl}`);
-      const data = await cachedResponse.json();
-      processOSMData(data);
+      const jsonData = await cachedResponse.json();
+      
+      if (jsonData.data && jsonData.gastroData !== undefined) {
+          // It's the new combined static format
+          processOSMData(jsonData.data, jsonData.gastroData);
+      } else {
+          // Legacy static format - fetch gastronomy and hope
+          try {
+              const gastroData = await fetchGastronomy(lat, lon);
+              processOSMData(jsonData, gastroData);
+          } catch(e) {
+              console.error("Failed to fetch gastronomy for cached city", e);
+              processOSMData(jsonData, null);
+          }
+      }
       return;
     }
   } catch (e) {
@@ -347,7 +364,20 @@ async function fetchNearbyStreets(lat: number, lon: number, retries = 3) {
         const dist = map.distance([lat, lon], [localCache.lat, localCache.lon]);
         if (dist <= 5000) { // Tolerate up to ~5km difference
           console.log(`Loaded OSM data from localStorage cache (dist: ${Math.round(dist)}m)`);
-          processOSMData(localCache.data);
+          
+          let gastroData = localCache.gastroData;
+          if (!gastroData) {
+              console.log("Local cache missing gastronomy, fetching it live...");
+              gastroData = await fetchGastronomy(lat, lon);
+              if (gastroData) {
+                  localCache.gastroData = gastroData;
+                  try {
+                      localStorage.setItem('osm_local_cache', JSON.stringify(localCache));
+                  } catch(e) {}
+              }
+          }
+          
+          processOSMData(localCache.data, gastroData);
           return;
         } else {
           console.log(`localStorage cache out of bounds (${Math.round(dist)}m > 5000m). Ignoring.`);
@@ -376,20 +406,24 @@ async function fetchNearbyStreets(lat: number, lon: number, retries = 3) {
   const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
 
   try {
-    const response = await fetch(url);
+    const [response, gastroData] = await Promise.all([
+      fetch(url),
+      fetchGastronomy(lat, lon)
+    ]);
+    
     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
     const data = await response.json();
 
     // Cache successful fetch to local storage
     try {
       localStorage.setItem('osm_local_cache', JSON.stringify({
-        lat, lon, data
+        lat, lon, data, gastroData
       }));
     } catch (e) {
       console.warn("Could not write to localStorage cache (data might be too large)", e);
     }
 
-    processOSMData(data);
+    processOSMData(data, gastroData);
   } catch (error) {
     console.error("Error fetching OSM data:", error);
     if (retries > 0) {
@@ -401,8 +435,73 @@ async function fetchNearbyStreets(lat: number, lon: number, retries = 3) {
   }
 }
 
-function processOSMData(data: any) {
+async function fetchGastronomy(lat: number, lon: number): Promise<any> {
+  const radius = 500;
+  const query = `[out:json][timeout:25];
+    (
+      node["amenity"~"^(restaurant|fast_food|cafe)$"](around:${radius},${lat},${lon});
+      node["shop"="kiosk"](around:${radius},${lat},${lon});
+      node["cuisine"~"^(pizza|doner|kebab|asian|chinese|vietnamese|thai|japanese|sushi|noodle|burger)$"](around:${radius},${lat},${lon});
+      way["amenity"~"^(restaurant|fast_food|cafe)$"](around:${radius},${lat},${lon});
+      way["shop"="kiosk"](around:${radius},${lat},${lon});
+      way["cuisine"~"^(pizza|doner|kebab|asian|chinese|vietnamese|thai|japanese|sushi|noodle|burger)$"](around:${radius},${lat},${lon});
+      relation["amenity"~"^(restaurant|fast_food|cafe)$"](around:${radius},${lat},${lon});
+      relation["shop"="kiosk"](around:${radius},${lat},${lon});
+      relation["cuisine"~"^(pizza|doner|kebab|asian|chinese|vietnamese|thai|japanese|sushi|noodle|burger)$"](around:${radius},${lat},${lon});
+    );
+    out center;`;
+  const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (e) {
+    console.warn("Gastronomy fetch failed", e);
+    return null;
+  }
+}
+
+function processOSMData(data: any, gastroData?: any) {
   engine.buildGraph(data);
+  
+  // Parse gastronomy data
+  const gastronomes: import('./game/engine').Gastronomy[] = [];
+  if (gastroData && gastroData.elements) {
+      console.log(`Parsing gastronomy data, found ${gastroData.elements.length} items`);
+      gastroData.elements.forEach((e: any) => {
+          const lat = (e.type === 'way' || e.type === 'relation') ? e.center?.lat : e.lat;
+          const lon = (e.type === 'way' || e.type === 'relation') ? e.center?.lon : e.lon;
+          if (lat && lon) {
+              let cuisine = e.tags?.cuisine || "";
+              let amenity = e.tags?.amenity || "";
+              let shop = e.tags?.shop || "";
+              let type = "unknown";
+              
+              if (cuisine.includes('doner') || cuisine.includes('kebab')) {
+                  type = 'doner';
+              } else if (cuisine.includes('pizza')) {
+                  type = 'pizza';
+              } else if (cuisine.match(/burger/i) || amenity === 'fast_food') {
+                  type = 'burger';
+              } else if (cuisine.match(/asian|chinese|vietnamese|thai|japanese|sushi|noodle/i)) {
+                  type = 'asia';
+              } else if (amenity) {
+                  type = amenity;
+              } else if (shop) {
+                  type = shop;
+              }
+              
+              let name = e.tags?.name || type;
+              gastronomes.push({
+                  id: e.id.toString(), lat, lon, type, name
+              });
+          }
+      });
+  } else {
+      console.log("No gastronomy data was provided to processOSMData");
+  }
+  engine.setGastronomes(gastronomes);
+
   const spawnNode = engine.findBestSpawnNode(userPos[0], userPos[1]);
   engine.setInitialPacmanPosition(spawnNode);
 
@@ -417,6 +516,10 @@ function processOSMData(data: any) {
 
   HUD.loading.classList.add('hidden');
   HUD.loading.style.display = 'none';
+
+  if (renderer && renderer.onMapLoaded) {
+    renderer.onMapLoaded();
+  }
 }
 
 function cacheStreetEdges() {
