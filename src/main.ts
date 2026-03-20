@@ -337,16 +337,12 @@ async function fetchNearbyStreets(lat: number, lon: number, retries = 3) {
       
       if (jsonData.data && jsonData.gastroData !== undefined) {
           // It's the new combined static format
-          processOSMData(jsonData.data, jsonData.gastroData);
+          processOSMData(jsonData.data);
+          handleGastroBackground(lat, lon, jsonData.gastroData);
       } else {
           // Legacy static format - fetch gastronomy and hope
-          try {
-              const gastroData = await fetchGastronomy(lat, lon);
-              processOSMData(jsonData, gastroData);
-          } catch(e) {
-              console.error("Failed to fetch gastronomy for cached city", e);
-              processOSMData(jsonData, null);
-          }
+          processOSMData(jsonData);
+          handleGastroBackground(lat, lon); // Will fetch live if not in jsonData
       }
       return;
     }
@@ -377,7 +373,9 @@ async function fetchNearbyStreets(lat: number, lon: number, retries = 3) {
               }
           }
           
-          processOSMData(localCache.data, gastroData);
+          processOSMData(localCache.data);
+          // Gastro is background now
+          handleGastroBackground(lat, lon, localCache.gastroData);
           return;
         } else {
           console.log(`localStorage cache out of bounds (${Math.round(dist)}m > 5000m). Ignoring.`);
@@ -406,24 +404,22 @@ async function fetchNearbyStreets(lat: number, lon: number, retries = 3) {
   const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
 
   try {
-    const [response, gastroData] = await Promise.all([
-      fetch(url),
-      fetchGastronomy(lat, lon)
-    ]);
-    
+    const response = await fetch(url);
     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
     const data = await response.json();
 
-    // Cache successful fetch to local storage
+    // Cache successful fetch to local storage (initially without gastroData)
     try {
       localStorage.setItem('osm_local_cache', JSON.stringify({
-        lat, lon, data, gastroData
+        lat, lon, data
       }));
     } catch (e) {
       console.warn("Could not write to localStorage cache (data might be too large)", e);
     }
 
-    processOSMData(data, gastroData);
+    processOSMData(data);
+    // Fetch gastro in background - no await
+    handleGastroBackground(lat, lon);
   } catch (error) {
     console.error("Error fetching OSM data:", error);
     if (retries > 0) {
@@ -461,13 +457,39 @@ async function fetchGastronomy(lat: number, lon: number): Promise<any> {
   }
 }
 
-function processOSMData(data: any, gastroData?: any) {
-  engine.buildGraph(data);
-  
-  // Parse gastronomy data
+async function handleGastroBackground(lat: number, lon: number, existingGastroData?: any) {
+    let gastroData = existingGastroData;
+    if (!gastroData) {
+        console.log("Fetching gastronomy in background...");
+        gastroData = await fetchGastronomy(lat, lon);
+        
+        // Update cache with gastroData
+        try {
+          const cachedString = localStorage.getItem('osm_local_cache');
+          if (cachedString) {
+              const cachedObj = JSON.parse(cachedString);
+              cachedObj.gastroData = gastroData;
+              localStorage.setItem('osm_local_cache', JSON.stringify(cachedObj));
+          }
+        } catch(e) {}
+    }
+    
+    if (gastroData) {
+        processGastroData(gastroData);
+        // If renderer has onGastronomyLoaded, notify it
+        if (renderer && renderer.onGastronomyLoaded) {
+            renderer.onGastronomyLoaded();
+        } else if (renderer && renderer.onMapLoaded) {
+            // Fallback: full rebuild if it's 3D and hasn't loaded yet
+            renderer.onMapLoaded();
+        }
+    }
+}
+
+function processGastroData(gastroData: any) {
   const gastronomes: import('./game/engine').Gastronomy[] = [];
   if (gastroData && gastroData.elements) {
-      console.log(`Parsing gastronomy data, found ${gastroData.elements.length} items`);
+      console.log(`Async parsing gastro data, found ${gastroData.elements.length} items`);
       gastroData.elements.forEach((e: any) => {
           const lat = (e.type === 'way' || e.type === 'relation') ? e.center?.lat : e.lat;
           const lon = (e.type === 'way' || e.type === 'relation') ? e.center?.lon : e.lon;
@@ -497,10 +519,12 @@ function processOSMData(data: any, gastroData?: any) {
               });
           }
       });
-  } else {
-      console.log("No gastronomy data was provided to processOSMData");
   }
   engine.setGastronomes(gastronomes);
+}
+
+function processOSMData(data: any) {
+  engine.buildGraph(data);
 
   const spawnNode = engine.findBestSpawnNode(userPos[0], userPos[1]);
   engine.setInitialPacmanPosition(spawnNode);

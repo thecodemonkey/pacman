@@ -106,13 +106,36 @@ export class Renderer3D implements IRenderer {
   }
 
   public onMapLoaded(): void {
+    if (!this.map || !this.scene || !this.renderer) return;
+
+    // Reset base origin for new city coordinate projection
     this.baseLat = 0;
     this.baseLon = 0;
     this.isMapBuilt = false;
+
+    // Clear ghost and rocket state mapping
     this.ghostMeshes.clear();
     this.ghostGroup.clear();
     this.rocketMeshes.clear();
     this.rocketsGroup.clear();
+
+    this.buildMap3D();
+    this.buildItems3D();
+
+    // After building the map, ensure the camera is looking at the right place
+    if (this.pacLatLng && this.pacMesh && this.camera) {
+      const pos = this.latLonToWorld(this.pacLatLng.lat, this.pacLatLng.lng);
+      this.pacMesh.position.set(pos.x, 15, pos.z);
+      this.camera.position.set(pos.x, pos.y + 800, pos.z + 800);
+      this.camera.lookAt(pos.x, pos.y + 10, pos.z);
+    }
+
+    this.isMapBuilt = true;
+  }
+
+  public onGastronomyLoaded(): void {
+     if (!this.isMapBuilt) return; // Map not yet built, we can wait for onMapLoaded
+     this.buildItems3D();
   }
 
   public init(container: HTMLElement): void {

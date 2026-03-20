@@ -55,4 +55,9 @@ export interface IRenderer {
    * Called when a new city/map dataset is loaded
    */
   onMapLoaded?(): void;
+
+  /**
+   * Called when gastronomy/restaurants data is loaded asynchronously
+   */
+  onGastronomyLoaded?(): void;
 }
