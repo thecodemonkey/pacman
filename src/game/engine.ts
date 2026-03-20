@@ -23,10 +23,10 @@ function initFX() {
 function playDot() {
   if (sndDot) {
     if ((sndDot as any).setVolume) {
-      (sndDot as any).setVolume(0.15).play();
+      (sndDot as any).setVolume(0.05).play();
     } else {
       const s = (sndDot as any).cloneNode(true) as HTMLAudioElement;
-      s.volume = 0.15;
+      s.volume = 0.05;
       s.play().catch(() => { });
     }
   }
@@ -35,10 +35,10 @@ function playDot() {
 function playPower() {
   if (sndPower) {
     if ((sndPower as any).setVolume) {
-      (sndPower as any).setVolume(0.4).play();
+      (sndPower as any).setVolume(0.15).play();
     } else {
       const s = (sndPower as any).cloneNode(true) as HTMLAudioElement;
-      s.volume = 0.4;
+      s.volume = 0.15;
       s.play().catch(() => { });
     }
   }
@@ -47,10 +47,10 @@ function playPower() {
 function playRocket() {
   if (sndRocket) {
     if ((sndRocket as any).setVolume) {
-      (sndRocket as any).setVolume(0.4).play();
+      (sndRocket as any).setVolume(0.15).play();
     } else {
       const s = (sndRocket as any).cloneNode(true) as HTMLAudioElement;
-      s.volume = 0.4;
+      s.volume = 0.15;
       s.play().catch(() => { });
     }
   }
@@ -59,10 +59,10 @@ function playRocket() {
 export function playHurt() {
   if (sndHurt) {
     if ((sndHurt as any).setVolume) {
-      (sndHurt as any).setVolume(0.5).play();
+      (sndHurt as any).setVolume(0.2).play();
     } else {
       const s = (sndHurt as any).cloneNode(true) as HTMLAudioElement;
-      s.volume = 0.5;
+      s.volume = 0.2;
       s.play().catch(() => { });
     }
   }
@@ -71,10 +71,10 @@ export function playHurt() {
 function playEatBot() {
   if (sndEatBot) {
     if ((sndEatBot as any).setVolume) {
-      (sndEatBot as any).setVolume(0.6).play();
+      (sndEatBot as any).setVolume(0.2).play();
     } else {
       const s = (sndEatBot as any).cloneNode(true) as HTMLAudioElement;
-      s.volume = 0.6;
+      s.volume = 0.2;
       s.play().catch(() => { });
     }
   }
@@ -83,10 +83,10 @@ function playEatBot() {
 function playGameOver() {
   if (sndGameOver) {
     if ((sndGameOver as any).setVolume) {
-      (sndGameOver as any).setVolume(0.6).play();
+      (sndGameOver as any).setVolume(0.3).play();
     } else {
       const s = (sndGameOver as any).cloneNode(true) as HTMLAudioElement;
-      s.volume = 0.6;
+      s.volume = 0.3;
       s.play().catch(() => { });
     }
   }

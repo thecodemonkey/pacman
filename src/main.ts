@@ -109,7 +109,7 @@ const HUD = {
 
 const bgMusic = new Audio('/vibeman.m4a');
 bgMusic.loop = true;
-bgMusic.volume = 0.4;
+bgMusic.volume = 0.3;
 
 // --- Rendering Abstraction ---
 let renderer: IRenderer;
